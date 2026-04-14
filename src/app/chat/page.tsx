@@ -44,8 +44,11 @@ export default function ChatPage() {
     setIsTyping(true);
 
     try {
-      const responseText = await processChatInteraction(currentInput);
-      
+      const chatHistory = [...messages, userMessage]
+        .slice(-5)
+        .map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+        
+      const responseText = await processChatInteraction(chatHistory);
       const assistantMessage = {
         id: Date.now(), // Use unique ID to prevent key collision issues with fast inputs
         role: 'assistant',

@@ -44,6 +44,21 @@ async function getCalendarContext(accessToken: string, params: CalendarToolReque
   let events = await getUpcomingEvents(accessToken, fetchLimit, timeMin, timeMax);
   console.log(`[DEBUG] Fetched ${events.length} explicit events from Google API.`);
 
+  // Past Date Verification & Resolution
+  if (params.date) {
+    const targetDate = params.date;
+    console.log(`[DEBUG] Conversational explicit date requested: ${targetDate}`);
+    // Compare YYYY-MM-DD string natively. sv-SE provides YYYY-MM-DD cleanly.
+    const osloFormat = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Oslo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    if (targetDate < osloFormat) {
+      console.log(`[DEBUG] BLOCKED: Requested date ${targetDate} is in the past relative to Oslo current date (${osloFormat})`);
+      return baseContext + `[SYSTEM FLAG]: The user's explicitly requested date (${targetDate}) is ALREADY IN THE PAST. DO NOT suggest free or booked time. Simply inform the user naturally that this date has passed.`;
+    }
+    
+    // Filter purely by exact date match in Iso format
+    events = events.filter(e => e.startIso?.startsWith(targetDate) || e.endIso?.startsWith(targetDate));
+  }
+
   // Apply Range & Weekday Filters
   if (params.range === 'today') {
     events = events.filter(e => e.date === 'Today');
@@ -122,12 +137,13 @@ async function getCalendarContext(accessToken: string, params: CalendarToolReque
   return finalContext;
 }
 
-export async function processChatInteraction(message: string) {
+export async function processChatInteraction(messages: {role: 'user' | 'assistant', content: string}[]) {
   console.log("CHAT ACTION STARTED");
 
   try {
     const session = await auth();
-    const lang = detectResponseLanguage(message);
+    const userMessageContent = messages.length > 0 ? messages[messages.length - 1].content : '';
+    const lang = detectResponseLanguage(userMessageContent);
 
     // 1. Guard against missing/expired local session state immediately
     if (!session?.accessToken) {
@@ -137,20 +153,18 @@ export async function processChatInteraction(message: string) {
         : "Your Google Calendar connection has expired. Please sign in again to continue.";
     }
 
-    // 2. Ask OpenAI to interpret the need and generate tool arguments
-    const toolRequest = await generateToolRequest(message);
-    console.log("TOOL PARAMS:", toolRequest);
-
     // 3. Execute the single calendar tool abstraction server-side
     const toolContext = await getCalendarContext(session.accessToken, toolRequest);
+    console.log("[DEBUG] Final Tool Context for LLM:", toolContext);
 
     // 4. Provide the result context to the final generation model
-    const finalResponse = await generateFinalResponse(message, toolContext, lang);
+    const finalResponse = await generateFinalResponse(messages, toolContext, lang);
     
     return finalResponse;
 
   } catch (error) {
-    const lang = detectResponseLanguage(message);
+    const userMessageContent = messages.length > 0 ? messages[messages.length - 1].content : '';
+    const lang = detectResponseLanguage(userMessageContent);
 
     if (error instanceof Error && error.message === 'GOOGLE_AUTH_EXPIRED') {
       console.log("CHAT BLOCKED: Caught GOOGLE_AUTH_EXPIRED during tool execution.");

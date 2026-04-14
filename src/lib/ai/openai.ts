@@ -29,11 +29,19 @@ export interface CalendarToolRequest {
 /**
  * Stage 1: Classify the user's query into a structured tool argument.
  */
-export async function generateToolRequest(message: string): Promise<CalendarToolRequest> {
+export async function generateToolRequest(messages: {role: 'user' | 'assistant', content: string}[]): Promise<CalendarToolRequest> {
   const fallback: CalendarToolRequest = { requiresCalendar: false };
   
+  const osloNow = new Date();
+  const osloOptions: Intl.DateTimeFormatOptions = { timeZone: 'Europe/Oslo', year: 'numeric', month: 'numeric', day: 'numeric', weekday: 'long', hour: '2-digit', minute: '2-digit' };
+  const strNow = new Intl.DateTimeFormat('en-GB', osloOptions).format(osloNow);
+  const [datePart, timePart] = strNow.split(', ');
+
   const systemPrompt = `You are an AI assistant orchestrator determining if a user's message requires checking their calendar.
 You MUST return a JSON object representing the tool call parameters.
+
+LOCAL TIME CONTEXT: The exact current time in Europe/Oslo is ${timePart}. Today is ${datePart}.
+CRITICAL RULE: If the user provides a follow-up reference (e.g., "Hva med tirsdag?"), you MUST look at the conversational history to resolve exactly WHICH Tuesday they mean based on the timeline, and explicitly use the target "date" string in "YYYY-MM-DD" format. Do not guess aimlessly.
 
 Keys:
 1. "requiresCalendar" (boolean): true if querying Google Calendar is necessary to answer the question.
@@ -49,35 +57,31 @@ Keys:
 11. "limit" (number, optional): max number of events to return.
 12. "needsSuggestion" (boolean, optional): true if user asks for free time, a meeting slot, or scheduling availability.
 13. "durationMinutes" (number, optional): numeric duration for the requested slot (e.g., 30, 60). Default to 30 if unstated but suggestion is requested.
-14. "date" (string, optional): specific relative target like "friday", or exact "YYYY-MM-DD" if applicable. DO NOT use if they ask for "last" or multiple things.
+14. "date" (string, optional): exact "YYYY-MM-DD" target if resolving a specific date context from history. DO NOT use if they ask for "last" or multiple things.
 
 Examples:
 User: "What time is it?" -> {"requiresCalendar": false}
 User: "Am I free tomorrow afternoon?" -> {"requiresCalendar": true, "range": "tomorrow", "partOfDay": "afternoon"}
 User: "Summarize only important things this week" -> {"requiresCalendar": true, "range": "this_week", "summaryStyle": "important_only"}
-User: "What is my first event tomorrow?" -> {"requiresCalendar": true, "range": "tomorrow", "first": true}
-User: "What is my last event today?" -> {"requiresCalendar": true, "range": "today", "last": true}
-User: "Do I have anything before 12 on Friday?" -> {"requiresCalendar": true, "weekday": "friday", "range": "upcoming", "beforeTime": "12:00"}
-User: "When is my next flight?" -> {"requiresCalendar": true, "keyword": "flight", "range": "upcoming", "first": true}`;
+History: [User: "Am I free this week?", Assistant: "You are busy on Monday."], User: "What about Tuesday?" -> {"requiresCalendar": true, "date": "Resolved YYYY-MM-DD of Tuesday this week."}
+`;
 
   try {
     const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      temperature: 0.1,
-      response_format: { type: 'json_object' },
+      model: "gpt-4o-mini",
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: message }
-      ]
+        ...messages
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0.1,
     });
 
-    const content = response.choices[0]?.message?.content;
-    if (!content) return fallback;
-
-    return JSON.parse(content) as CalendarToolRequest;
-
-  } catch (error) {
-    console.error('Error generating tool request:', error);
+    const out = response.choices[0].message?.content || '{}';
+    console.log("[DEBUG] Stage 1 Output:", out);
+    return JSON.parse(out) as CalendarToolRequest;
+  } catch (err) {
+    console.error("[ERROR] Failed to map intent:", err);
     return fallback;
   }
 }
@@ -97,27 +101,34 @@ export function detectResponseLanguage(msg: string): 'no' | 'en' {
 /**
  * Stage 2: Final Natural Language Generation
  */
-export async function generateFinalResponse(message: string, context: string, lang: 'no' | 'en'): Promise<string> {
+export async function generateFinalResponse(messages: {role: 'user' | 'assistant', content: string}[], systemContext: string, lang: 'no' | 'en'): Promise<string> {
+  const osloNow = new Date();
+  const strNow = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Oslo', year: 'numeric', month: 'numeric', day: 'numeric', weekday: 'long' }).format(osloNow);
+
   const langRule = lang === 'no' 
     ? "IMPORTANT: The user wrote in Norwegian. You MUST reply ONLY in natural Norwegian Bokmål. NEVER use Danish or English."
     : "IMPORTANT: The user wrote in English. You MUST reply ONLY in English. NEVER use Danish or Norwegian.";
 
-  const systemPrompt = `You are Luke, a premium, helpful, concise personal assistant.
-Answer the user's message naturally based exactly on the provided tool context. 
-Be direct, helpful, and do not yap excessively. Keep formatting elegant and readable. If time context dictates it, act warmly.
+  const finalSystemPrompt = `You are an executive personal assistant named Luke.
+You are concise, professional, but friendly.
 
-${langRule}
+CRITICAL BEHAVIOR RULES:
+1. ${langRule}
+2. CURRENT DATE GROUNDING: Today is ${strNow} local time. NEVER reason about dates as if it is a different day.
+3. CONVERSATIONAL ANCHORING: If the context fetched from the tool refers to one specific day, ONLY answer about that specific day. Do not ramble into other days unless the user asked a multi-day question like "this week".
+4. MULTI-DAY SUMMARIES: If the user asked about a whole week, provide a useful summary of the week's availability or business. Do not answer by only mentioning Monday.
+5. PAST DATE REJECTION: If the system context flags that a requested date is in the past, or if you notice you are suggesting a slot that occurred prior to ${strNow}, immediately apologize and inform the user that the date has passed naturally. DO NOT suggest passed dates.
 
 TOOL OR SYSTEM CONTEXT:
-${context}`;
+${systemContext}`;
 
   try {
     const response = await openai.chat.completions.create({
       model: 'gpt-4o',
       temperature: 0.4,
       messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: message }
+        { role: 'system', content: finalSystemPrompt },
+        ...messages
       ]
     });
 
