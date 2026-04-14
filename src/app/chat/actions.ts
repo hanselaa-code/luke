@@ -79,8 +79,11 @@ export async function processChatInteraction(message: string) {
     return formatEventsResponse(events, timeContext);
 
   } catch (error) {
-    console.error('Error fetching calendar in chat:', error);
-    return "I'm sorry, I had trouble fetching your calendar right now. Please try again later.";
+    console.error("CHAT ERROR:", error);
+
+    return `Server Error: ${
+      error instanceof Error ? error.message : String(error)
+    }`;
   }
 }
 
