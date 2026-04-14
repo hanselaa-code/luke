@@ -1,7 +1,7 @@
 'use server';
 
 import { auth } from '@/auth';
-import { getTomorrowsEvents, getUpcomingEvents } from '@/lib/google/calendar';
+import { getTomorrowsEvents, getUpcomingEvents, getOsloBounds } from '@/lib/google/calendar';
 import { CalendarToolRequest, generateToolRequest, generateFinalResponse, detectResponseLanguage } from '@/lib/ai/openai';
 
 function getStartHour(timeStr: string): number {
@@ -29,8 +29,20 @@ async function getCalendarContext(accessToken: string, params: CalendarToolReque
   }
 
   // Determine standard fetch boundary
-  const fetchLimit = (params.range === 'upcoming' || params.range === 'this_week' || params.keyword) ? 50 : 20;
-  let events = await getUpcomingEvents(accessToken, fetchLimit);
+  let fetchLimit = (params.range === 'upcoming' || params.keyword) ? 50 : 20;
+  let timeMin: string | undefined;
+  let timeMax: string | undefined;
+
+  if (params.range === 'this_week' || params.range === 'next_week' || params.range === 'this_month') {
+    const bounds = getOsloBounds(params.range);
+    timeMin = bounds.timeMin;
+    timeMax = bounds.timeMax;
+    fetchLimit = 200; // expand limit safely to ensure entire block is fetched
+    console.log(`[DEBUG] Explicit bounds for ${params.range}: calculated start ${timeMin}, calculated end ${timeMax}`);
+  }
+
+  let events = await getUpcomingEvents(accessToken, fetchLimit, timeMin, timeMax);
+  console.log(`[DEBUG] Fetched ${events.length} explicit events from Google API.`);
 
   // Apply Range & Weekday Filters
   if (params.range === 'today') {
@@ -45,7 +57,18 @@ async function getCalendarContext(accessToken: string, params: CalendarToolReque
   // Apply Keyword Filter
   if (params.keyword) {
     const kw = params.keyword.toLowerCase().trim();
-    events = events.filter(e => e.title.toLowerCase().includes(kw));
+    const flightVariants = ['flight', 'fly', 'flyvning', 'reise'];
+    
+    if (flightVariants.some(v => kw.includes(v))) {
+      const matchCountBefore = events.length;
+      events = events.filter(e => {
+        const title = e.title.toLowerCase();
+        return flightVariants.some(v => title.includes(v));
+      });
+      console.log(`[DEBUG] Number of flights matched: ${events.length} (out of ${matchCountBefore} total fetched)`);
+    } else {
+      events = events.filter(e => e.title.toLowerCase().includes(kw));
+    }
   }
 
   // Apply Time Bounds Filters

@@ -11,7 +11,7 @@ const openai = new OpenAI({
 export interface CalendarToolRequest {
   requiresCalendar: boolean;
   action?: string;
-  range?: 'today' | 'tomorrow' | 'this_week' | 'upcoming';
+  range?: 'today' | 'tomorrow' | 'this_week' | 'next_week' | 'this_month' | 'upcoming';
   weekday?: string;
   partOfDay?: 'morning' | 'afternoon' | 'evening';
   beforeTime?: string;
@@ -35,7 +35,7 @@ You MUST return a JSON object representing the tool call parameters.
 Keys:
 1. "requiresCalendar" (boolean): true if querying Google Calendar is necessary to answer the question.
 2. "action" (string, optional): e.g., "query", "summarize"
-3. "range" (string, optional): "today" | "tomorrow" | "this_week" | "upcoming"
+3. "range" (string, optional): "today" | "tomorrow" | "this_week" | "next_week" | "this_month" | "upcoming"
 4. "weekday" (string, optional): specific day like "friday", "monday"
 5. "partOfDay" (string, optional): "morning" | "afternoon" | "evening"
 6. "beforeTime" (string, optional): "HH:mm" boundary (e.g. "12:00")

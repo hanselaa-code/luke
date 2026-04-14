@@ -78,16 +78,68 @@ function formatEvent(event: any): FormattedEvent {
   };
 }
 
+export function getOsloDate() {
+  const format = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Oslo', year: 'numeric', month: 'numeric', day: 'numeric' }).format(new Date());
+  const [y, m, d] = format.split('-').map(Number);
+  return { year: y, month: m, day: d };
+}
+
+function getOsloOffsetString(year: number, month: number, day: number) {
+  const d = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  const offsetStr = new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Oslo', timeZoneName: 'longOffset' }).format(d);
+  const match = offsetStr.match(/GMT([+-]\d{2}:\d{2})/);
+  if (match) return match[1];
+  return '+01:00';
+}
+
+function buildOsloISO(year: number, month: number, day: number, hour: string, minute: string, second: string) {
+   const y = String(year).padStart(4, '0');
+   const m = String(month).padStart(2, '0');
+   const d = String(day).padStart(2, '0');
+   const offset = getOsloOffsetString(year, month, day);
+   return `${y}-${m}-${d}T${hour}:${minute}:${second}${offset}`;
+}
+
+export function getOsloBounds(range: 'this_week' | 'next_week' | 'this_month') {
+  const { year, month, day } = getOsloDate();
+  const getDummyDate = (y: number, m: number, d: number) => new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+  const dummyNow = getDummyDate(year, month, day);
+
+  let startDummy = dummyNow;
+  let endDummy = dummyNow;
+
+  if (range === 'this_week') {
+    const dow = dummyNow.getUTCDay();
+    const diffToMonday = dow === 0 ? -6 : 1 - dow;
+    startDummy = new Date(dummyNow.getTime() + diffToMonday * 86400000);
+    endDummy = new Date(startDummy.getTime() + 6 * 86400000);
+  } else if (range === 'next_week') {
+    const dow = dummyNow.getUTCDay();
+    const diffToMonday = dow === 0 ? -6 : 1 - dow;
+    startDummy = new Date(dummyNow.getTime() + (diffToMonday + 7) * 86400000);
+    endDummy = new Date(startDummy.getTime() + 6 * 86400000);
+  } else if (range === 'this_month') {
+    startDummy = getDummyDate(year, month, 1);
+    endDummy = getDummyDate(year, month + 1, 0); 
+  }
+
+  return { 
+    timeMin: buildOsloISO(startDummy.getUTCFullYear(), startDummy.getUTCMonth() + 1, startDummy.getUTCDate(), '00', '00', '00'),
+    timeMax: buildOsloISO(endDummy.getUTCFullYear(), endDummy.getUTCMonth() + 1, endDummy.getUTCDate(), '23', '59', '59')
+  };
+}
+
 /**
  * Fetch generic upcoming events for the calendar page.
  */
-export async function getUpcomingEvents(accessToken: string, maxResults = 10): Promise<FormattedEvent[]> {
+export async function getUpcomingEvents(accessToken: string, maxResults = 10, timeMin?: string, timeMax?: string): Promise<FormattedEvent[]> {
   const calendar = getCalendarClient(accessToken);
 
   try {
     const response = await calendar.events.list({
       calendarId: 'primary',
-      timeMin: new Date().toISOString(),
+      timeMin: timeMin || new Date().toISOString(),
+      ...(timeMax ? { timeMax } : {}),
       maxResults,
       singleEvents: true,
       orderBy: 'startTime',
