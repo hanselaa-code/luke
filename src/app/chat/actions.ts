@@ -3,6 +3,7 @@
 import { auth } from '@/auth';
 import { getTomorrowsEvents, getUpcomingEvents, FormattedEvent } from '@/lib/google/calendar';
 import { interpretCalendarIntent } from '@/lib/ai/openai';
+import { format } from 'date-fns';
 
 // Small wrapper utilities leveraging the existing Google Calendar functions
 async function getTodaysEvents(accessToken: string) {
@@ -15,19 +16,15 @@ async function getNextEvent(accessToken: string) {
   return events.slice(0, 1);
 }
 
+async function getNextFlightEvent(accessToken: string) {
+  const events = await getUpcomingEvents(accessToken, 100);
+  return events.find(e => e.title.toLowerCase().includes('flight'));
+}
+
 async function getEventsForDay(accessToken: string, day: string) {
   const events = await getUpcomingEvents(accessToken, 50);
   const target = day.toLowerCase().trim();
   return events.filter(e => e.date.toLowerCase().includes(target));
-}
-
-function formatEventsResponse(events: FormattedEvent[], timeContext: string) {
-  if (!events || events.length === 0) {
-    return "You have nothing scheduled.";
-  }
-
-  const eventList = events.map(e => `• ${e.title} at ${e.time}`).join('\n');
-  return `You have ${events.length} event${events.length === 1 ? '' : 's'} ${timeContext}:\n${eventList}`;
 }
 
 export async function processChatInteraction(message: string) {
@@ -45,42 +42,56 @@ export async function processChatInteraction(message: string) {
     const { intent, day } = await interpretCalendarIntent(message);
     console.log("AI intent:", intent);
 
-    let events: FormattedEvent[] = [];
-    let timeContext = '';
-
     switch (intent) {
-      case 'today':
-        events = await getTodaysEvents(session.accessToken);
-        timeContext = 'today';
-        break;
-      case 'tomorrow':
-        events = await getTomorrowsEvents(session.accessToken);
-        timeContext = 'tomorrow';
-        break;
+      case 'current_day': {
+        const todayStr = format(new Date(), 'EEEE, MMMM d');
+        return `Today is ${todayStr}.`;
+      }
+      case 'current_time': {
+        const timeStr = format(new Date(), 'HH:mm');
+        return `The time is ${timeStr}.`;
+      }
+      case 'today': {
+        const events = await getTodaysEvents(session.accessToken);
+        if (events.length === 0) return "You have nothing scheduled today.";
+        const list = events.map(e => `• ${e.time}: ${e.title}`).join('\n');
+        return `You have ${events.length} event${events.length === 1 ? '' : 's'} today:\n${list}`;
+      }
+      case 'tomorrow': {
+        const events = await getTomorrowsEvents(session.accessToken);
+        if (events.length === 0) return "You have nothing scheduled tomorrow.";
+        const list = events.map(e => `• ${e.time}: ${e.title}`).join('\n');
+        return `You have ${events.length} event${events.length === 1 ? '' : 's'} tomorrow:\n${list}`;
+      }
       case 'this_week':
-      case 'summary':
-        events = await getUpcomingEvents(session.accessToken, 10);
-        timeContext = 'coming up';
-        break;
-      case 'next_event':
-        events = await getNextEvent(session.accessToken);
-        timeContext = 'next';
-        break;
-      case 'specific_day':
-        if (day) {
-          events = await getEventsForDay(session.accessToken, day);
-          timeContext = `on ${day}`;
-        } else {
-          events = await getUpcomingEvents(session.accessToken, 10);
-          timeContext = `coming up`;
-        }
-        break;
+      case 'summary': {
+        const events = await getUpcomingEvents(session.accessToken, 15);
+        if (events.length === 0) return "Your schedule is clear for the coming days.";
+        const list = events.map(e => `• ${e.date} at ${e.time}: ${e.title}`).join('\n');
+        return `You have ${events.length} event${events.length === 1 ? '' : 's'} left this week. Here is your summary:\n${list}`;
+      }
+      case 'next_event': {
+        const events = await getNextEvent(session.accessToken);
+        if (events.length === 0) return "You have no upcoming events.";
+        const e = events[0];
+        return `Your next event is ${e.title} on ${e.date} at ${e.time}.`;
+      }
+      case 'next_flight': {
+        const flight = await getNextFlightEvent(session.accessToken);
+        if (!flight) return "You do not have any flights coming up.";
+        return `Your next flight is ${flight.title} on ${flight.date} at ${flight.time}.`;
+      }
+      case 'specific_day': {
+        if (!day) return "I'm not sure which day you mean.";
+        const events = await getEventsForDay(session.accessToken, day);
+        if (events.length === 0) return `You have nothing scheduled on ${day}.`;
+        const list = events.map(e => `• ${e.time}: ${e.title}`).join('\n');
+        return `You have ${events.length} event${events.length === 1 ? '' : 's'} on ${day}:\n${list}`;
+      }
       case 'unknown':
       default:
-        return "I'm still learning! Right now, I can check your calendar for today, tomorrow, or a specific day.";
+        return "I'm still learning! Try asking me what you have today, when your next flight is, or simply what time it is.";
     }
-
-    return formatEventsResponse(events, timeContext);
 
   } catch (error) {
     console.error("CHAT ERROR FULL:", error);

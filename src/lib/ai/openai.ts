@@ -9,7 +9,7 @@ const openai = new OpenAI({
 });
 
 export interface CalendarIntent {
-  intent: 'tomorrow' | 'today' | 'this_week' | 'next_event' | 'specific_day' | 'summary' | 'unknown';
+  intent: 'current_day' | 'current_time' | 'tomorrow' | 'today' | 'this_week' | 'next_event' | 'next_flight' | 'specific_day' | 'summary' | 'unknown';
   day: string | null;
 }
 
@@ -25,24 +25,24 @@ Your job is to classify the user's natural language message to determine what ca
 
 You MUST return a JSON object with exactly two keys:
 1. "intent": A string representing the action. It MUST be EXACTLY one of the following:
-   ["tomorrow", "today", "this_week", "next_event", "specific_day", "summary", "unknown"]
+   ["current_day", "current_time", "today", "tomorrow", "this_week", "next_event", "next_flight", "specific_day", "summary", "unknown"]
 2. "day": If intent is "specific_day", extract the day string (e.g., "friday", "monday"). Otherwise, provide null.
 
 Examples:
+User: "What day is it today?"
+JSON: {"intent": "current_day", "day": null}
+
+User: "What time is it?"
+JSON: {"intent": "current_time", "day": null}
+
+User: "When is my next flight?"
+JSON: {"intent": "next_flight", "day": null}
+
 User: "What do I have tomorrow?"
 JSON: {"intent": "tomorrow", "day": null}
 
 User: "Do I have anything on Friday?"
-JSON: {"intent": "specific_day", "day": "friday"}
-
-User: "Show my schedule for today"
-JSON: {"intent": "today", "day": null}
-
-User: "What's my next meeting?"
-JSON: {"intent": "next_event", "day": null}
-
-User: "How does my week look?"
-JSON: {"intent": "this_week", "day": null}`;
+JSON: {"intent": "specific_day", "day": "friday"}`;
 
   try {
     const response = await openai.chat.completions.create({
