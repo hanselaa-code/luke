@@ -93,7 +93,15 @@ export async function getUpcomingEvents(accessToken: string, maxResults = 10): P
       orderBy: 'startTime',
     });
 
-    const events = response.data.items || [];
+    let events = response.data.items || [];
+    
+    // Filter out birthday-style events to avoid cluttering the primary schedule view.
+    events = events.filter((event: any) => {
+      const isBirthdayType = event.eventType?.toLowerCase() === 'birthday';
+      const summaryHasBirthday = (event.summary || '').toLowerCase().includes('birthday');
+      return !(isBirthdayType || summaryHasBirthday);
+    });
+
     return events.map(formatEvent);
   } catch (error: any) {
     console.error('[DEBUG - ERROR] Google Calendar API error (getUpcomingEvents):', error.message || error);
@@ -120,7 +128,15 @@ export async function getTomorrowsEvents(accessToken: string): Promise<Formatted
       orderBy: 'startTime',
     });
 
-    const events = response.data.items || [];
+    let events = response.data.items || [];
+    
+    // Filter out birthday-style events to avoid cluttering the primary schedule view.
+    events = events.filter((event: any) => {
+      const isBirthdayType = event.eventType?.toLowerCase() === 'birthday';
+      const summaryHasBirthday = (event.summary || '').toLowerCase().includes('birthday');
+      return !(isBirthdayType || summaryHasBirthday);
+    });
+
     return events.map(formatEvent);
   } catch (error) {
     console.error('Error fetching tomorrow\'s events:', error);
