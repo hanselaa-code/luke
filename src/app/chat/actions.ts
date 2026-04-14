@@ -2,7 +2,7 @@
 
 import { auth } from '@/auth';
 import { getTomorrowsEvents, getUpcomingEvents } from '@/lib/google/calendar';
-import { CalendarToolRequest, generateToolRequest, generateFinalResponse } from '@/lib/ai/openai';
+import { CalendarToolRequest, generateToolRequest, generateFinalResponse, detectResponseLanguage } from '@/lib/ai/openai';
 
 function getStartHour(timeStr: string): number {
   if (timeStr === 'All Day') return 0;
