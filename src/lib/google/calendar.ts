@@ -23,6 +23,8 @@ export interface FormattedEvent {
   date: string;
   location?: string;
   type: string;
+  startIso?: string;
+  endIso?: string;
 }
 
 /**
@@ -31,7 +33,7 @@ export interface FormattedEvent {
 function formatEvent(event: any): FormattedEvent {
   const isAllDay = !!event.start?.date;
   const startTime = isAllDay ? new Date(event.start.date) : new Date(event.start.dateTime);
-  const endTime = event.end?.dateTime ? new Date(event.end.dateTime) : null;
+  const endTime = event.end?.dateTime ? new Date(event.end.dateTime) : (event.end?.date ? new Date(event.end.date) : null);
 
   // Format time string
   let timeStr = 'All Day';
@@ -75,7 +77,101 @@ function formatEvent(event: any): FormattedEvent {
     date: dateDisplay,
     location: event.location,
     type,
+    startIso: startTime.toISOString(),
+    endIso: endTime ? endTime.toISOString() : undefined,
   };
+}
+
+/**
+ * Availability Engine Context Generator
+ * Bounds: Default 08:00 to 18:00
+ */
+export function getFreeSlots(events: FormattedEvent[], durationMinutes: number = 30, boundsStartIso?: string, boundsEndIso?: string, partOfDay?: 'morning' | 'afternoon' | 'evening'): string[] {
+  const suggestions: string[] = [];
+  
+  // Hard defaults to next 7 days if boundaries aren't passed explicitly, for suggestion loop safety.
+  const startObj = boundsStartIso ? new Date(boundsStartIso) : new Date();
+  const endObj = boundsEndIso ? new Date(boundsEndIso) : new Date(Date.now() + 7 * 86400000);
+  
+  let currentCursor = startObj.getTime();
+  
+  // We process by shifting the cursor day-by-day.
+  // We'll iterate up to 14 days max for safety to prevent infinite loops.
+  
+  // Filter events down to standard timed events that actually block schedule
+  const blockingEvents = events
+    .filter(e => e.startIso && e.endIso && e.time !== 'All Day' && !e.title.toLowerCase().includes('flight'))
+    .map(e => ({ start: new Date(e.startIso!).getTime(), end: new Date(e.endIso!).getTime() }))
+    .sort((a, b) => a.start - b.start);
+
+  const durationMs = durationMinutes * 60 * 1000;
+  let dayOffset = 0;
+  
+  while (currentCursor < endObj.getTime() && dayOffset < 14) {
+    const cursorDate = new Date(currentCursor);
+    const osloOptions = { timeZone: 'Europe/Oslo' };
+    
+    // Convert current cursor day to Oslo bounds using native string parsing
+    const yStr = new Intl.DateTimeFormat('en-US', { ...osloOptions, year: 'numeric' }).format(cursorDate);
+    const mStr = new Intl.DateTimeFormat('en-US', { ...osloOptions, month: 'numeric' }).format(cursorDate);
+    const dStr = new Intl.DateTimeFormat('en-US', { ...osloOptions, day: 'numeric' }).format(cursorDate);
+    const y = parseInt(yStr); const m = parseInt(mStr); const d = parseInt(dStr);
+    
+    // Determine the user's local Workday Bounds (default 08:00 - 18:00) by converting it to UTC
+    const getDummyDate = (h: number, min: number) => new Date(Date.UTC(y, m - 1, d, h, min, 0));
+    const offsetStr = new Intl.DateTimeFormat('en-US', { ...osloOptions, timeZoneName: 'longOffset' }).format(getDummyDate(12, 0));
+    // extract UTC offset from 'GMT+02:00'
+    let hoursOffset = 1; // fallback
+    const match = offsetStr.match(/GMT([+-])(\d{2}):(\d{2})/);
+    if (match) {
+      hoursOffset = parseInt(match[2]);
+      if (match[1] === '-') hoursOffset = -hoursOffset;
+    }
+    
+    // Shift dummy UTC inputs to exact local ms using the inversion of the timezone offset
+    const msOffset = hoursOffset * 3600000;
+    
+    let startHour = 8;
+    let endHour = 18;
+    
+    if (partOfDay === 'morning') { startHour = 8; endHour = 12; }
+    else if (partOfDay === 'afternoon') { startHour = 12; endHour = 17; }
+    else if (partOfDay === 'evening') { startHour = 17; endHour = 21; }
+
+    const workdayStartMs = new Date(Date.UTC(y, m - 1, d, startHour, 0, 0)).getTime() - msOffset;
+    const workdayEndMs = new Date(Date.UTC(y, m - 1, d, endHour, 0, 0)).getTime() - msOffset;
+    
+    let pointerMs = Math.max(workdayStartMs, startObj.getTime());
+    const stopMs = Math.min(workdayEndMs, endObj.getTime());
+
+    // Iterate through blocks within this day
+    while (pointerMs + durationMs <= stopMs) {
+      // Find following blocking event
+      const conflict = blockingEvents.find(e => e.start < pointerMs + durationMs && e.end > pointerMs);
+      
+      if (conflict) {
+        pointerMs = conflict.end; // jump to end of conflict
+      } else {
+        // Free slot found!
+        const slotStart = new Date(pointerMs);
+        const slotEnd = new Date(pointerMs + durationMs);
+        
+        // Format nicely into string
+        const fOptions: Intl.DateTimeFormatOptions = { weekday: 'long', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Oslo', hour12: false };
+        const fEndOptions: Intl.DateTimeFormatOptions = { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Oslo', hour12: false };
+        const slotString = `${new Intl.DateTimeFormat('en-GB', fOptions).format(slotStart)} - ${new Intl.DateTimeFormat('en-GB', fEndOptions).format(slotEnd)} (Oslo Time)`;
+        
+        suggestions.push(slotString);
+        pointerMs += durationMs; // jump forward by the duration to find next block
+      }
+    }
+    
+    // Advance to next day at midnight
+    currentCursor = new Date(Date.UTC(y, m - 1, d + 1, 0, 0, 0)).getTime() - msOffset;
+    dayOffset++;
+  }
+
+  return suggestions;
 }
 
 export function getOsloDate() {

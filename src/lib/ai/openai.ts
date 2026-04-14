@@ -13,6 +13,7 @@ export interface CalendarToolRequest {
   action?: string;
   range?: 'today' | 'tomorrow' | 'this_week' | 'next_week' | 'this_month' | 'upcoming';
   weekday?: string;
+  date?: string;
   partOfDay?: 'morning' | 'afternoon' | 'evening';
   beforeTime?: string;
   afterTime?: string;
@@ -21,6 +22,8 @@ export interface CalendarToolRequest {
   last?: boolean;
   summaryStyle?: 'full' | 'important_only';
   limit?: number;
+  needsSuggestion?: boolean;
+  durationMinutes?: number;
 }
 
 /**
@@ -34,17 +37,19 @@ You MUST return a JSON object representing the tool call parameters.
 
 Keys:
 1. "requiresCalendar" (boolean): true if querying Google Calendar is necessary to answer the question.
-2. "action" (string, optional): e.g., "query", "summarize"
+2. "action" (string, optional): e.g., "query", "summarize", "suggest"
 3. "range" (string, optional): "today" | "tomorrow" | "this_week" | "next_week" | "this_month" | "upcoming"
 4. "weekday" (string, optional): specific day like "friday", "monday"
 5. "partOfDay" (string, optional): "morning" | "afternoon" | "evening"
 6. "beforeTime" (string, optional): "HH:mm" boundary (e.g. "12:00")
-7. "afterTime" (string, optional): "HH:mm" boundary
-8. "keyword" (string, optional): title keyword to search for, e.g., "flight", "meeting"
-9. "first" (boolean, optional): true if they asked for their first event
-10. "last" (boolean, optional): true if they asked for their last event
-11. "summaryStyle" (string, optional): "full" | "important_only"
-12. "limit" (number, optional): max number of events to fetch. DO NOT use if they ask for "last" or multiple things.
+7. "afterTime" (string, optional): "HH:mm" boundary (e.g. "16:00")
+8. "keyword" (string, optional): word to filter by, e.g., "flight", "dentist"
+9. "first" / "last" (boolean, optional): if they ask for the first/last event.
+10. "summaryStyle" (string, optional): "full" or "important_only"
+11. "limit" (number, optional): max number of events to return.
+12. "needsSuggestion" (boolean, optional): true if user asks for free time, a meeting slot, or scheduling availability.
+13. "durationMinutes" (number, optional): numeric duration for the requested slot (e.g., 30, 60). Default to 30 if unstated but suggestion is requested.
+14. "date" (string, optional): specific relative target like "friday", or exact "YYYY-MM-DD" if applicable. DO NOT use if they ask for "last" or multiple things.
 
 Examples:
 User: "What time is it?" -> {"requiresCalendar": false}

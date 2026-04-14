@@ -1,7 +1,7 @@
 'use server';
 
 import { auth } from '@/auth';
-import { getTomorrowsEvents, getUpcomingEvents, getOsloBounds } from '@/lib/google/calendar';
+import { getTomorrowsEvents, getUpcomingEvents, getOsloBounds, getFreeSlots } from '@/lib/google/calendar';
 import { CalendarToolRequest, generateToolRequest, generateFinalResponse, detectResponseLanguage } from '@/lib/ai/openai';
 
 function getStartHour(timeStr: string): number {
@@ -103,11 +103,23 @@ async function getCalendarContext(accessToken: string, params: CalendarToolReque
 
   // Format payload for the model
   if (events.length === 0) {
+    if (params.needsSuggestion) {
+      const freeSlots = getFreeSlots([], params.durationMinutes || 30, timeMin, timeMax, params.partOfDay);
+      return baseContext + `The requested window is completely empty! Here are the computed free slots for the user:\n` + freeSlots.slice(0, 5).map(s => `- ${s}`).join('\n');
+    }
     return baseContext + `The calendar tool executed but found 0 matching events based on the requested filters.`;
   }
 
   const eventList = events.map(e => `- ${e.date} at ${e.time}: ${e.title} (Type: ${e.type})`).join('\n');
-  return baseContext + `\n\nFetched Calendar Data:\n${eventList}`;
+  let finalContext = baseContext + `\n\nFetched Calendar Data:\n${eventList}`;
+  
+  if (params.needsSuggestion) {
+    const freeSlots = getFreeSlots(events, params.durationMinutes || 30, timeMin, timeMax, params.partOfDay);
+    console.log(`[DEBUG] Suggestion mode triggered! Computed ${freeSlots.length} free windows.`);
+    finalContext += `\n\nComputed Free Slots for Suggestion:\n` + (freeSlots.length > 0 ? freeSlots.slice(0, 5).map(s => `- ${s}`).join('\n') : "NO FREE TIME DETECTED IN BOUNDS.");
+  }
+
+  return finalContext;
 }
 
 export async function processChatInteraction(message: string) {
