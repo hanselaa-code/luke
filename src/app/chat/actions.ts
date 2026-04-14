@@ -44,11 +44,21 @@ export async function processChatInteraction(message: string) {
 
     switch (intent) {
       case 'current_day': {
-        const todayStr = format(new Date(), 'EEEE, MMMM d');
+        const todayStr = new Intl.DateTimeFormat('en-US', {
+          timeZone: 'Europe/Oslo',
+          weekday: 'long',
+          month: 'long',
+          day: 'numeric'
+        }).format(new Date());
         return `Today is ${todayStr}.`;
       }
       case 'current_time': {
-        const timeStr = format(new Date(), 'HH:mm');
+        const timeStr = new Intl.DateTimeFormat('en-GB', {
+          timeZone: 'Europe/Oslo',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
+        }).format(new Date());
         return `The time is ${timeStr}.`;
       }
       case 'today': {
