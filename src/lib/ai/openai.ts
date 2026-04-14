@@ -1,8 +1,12 @@
 import OpenAI from 'openai';
 
-// Initialize the standard OpenAI client
-// The SDK automatically uses process.env.OPENAI_API_KEY
-const openai = new OpenAI();
+if (!process.env.OPENAI_API_KEY) {
+  throw new Error("OPENAI_API_KEY is missing in environment");
+}
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 export interface CalendarIntent {
   intent: 'tomorrow' | 'today' | 'this_week' | 'next_event' | 'specific_day' | 'summary' | 'unknown';
