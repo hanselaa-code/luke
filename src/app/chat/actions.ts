@@ -4,6 +4,13 @@ import { auth } from '@/auth';
 import { getTomorrowsEvents, getUpcomingEvents } from '@/lib/google/calendar';
 import { CalendarToolRequest, generateToolRequest, generateFinalResponse } from '@/lib/ai/openai';
 
+function getStartHour(timeStr: string): number {
+  if (timeStr === 'All Day') return 0;
+  const match = timeStr.match(/^(\d{2}):/);
+  if (match) return parseInt(match[1], 10);
+  return 0; // fallback
+}
+
 /**
  * Single server-side tool abstraction handling all calendar query combinations.
  */
@@ -12,6 +19,10 @@ async function getCalendarContext(accessToken: string, params: CalendarToolReque
   const timeStr = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Oslo', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
   
   let baseContext = `System Context: The current time is ${timeStr}. Today is ${currentWeekDay}. `;
+
+  if (params.summaryStyle) {
+    baseContext += `The user explicitly requested a ${params.summaryStyle.replace('_', ' ')} style summary. Format your response accordingly. `;
+  }
 
   if (!params.requiresCalendar) {
     return baseContext + "No calendar data was requested.";
@@ -25,7 +36,6 @@ async function getCalendarContext(accessToken: string, params: CalendarToolReque
   if (params.range === 'today') {
     events = events.filter(e => e.date === 'Today');
   } else if (params.range === 'tomorrow') {
-    // getTomorrowsEvents correctly bounds the 24h period 
     events = await getTomorrowsEvents(accessToken);
   } else if (params.weekday) {
     const target = params.weekday.toLowerCase().trim();
@@ -38,17 +48,42 @@ async function getCalendarContext(accessToken: string, params: CalendarToolReque
     events = events.filter(e => e.title.toLowerCase().includes(kw));
   }
 
-  // Apply Limit Filter
-  if (params.limit) {
+  // Apply Time Bounds Filters
+  if (params.partOfDay) {
+    if (params.partOfDay === 'morning') {
+      events = events.filter(e => e.time === 'All Day' || getStartHour(e.time) < 12);
+    } else if (params.partOfDay === 'afternoon') {
+      events = events.filter(e => e.time !== 'All Day' && getStartHour(e.time) >= 12 && getStartHour(e.time) < 17);
+    } else if (params.partOfDay === 'evening') {
+      events = events.filter(e => e.time !== 'All Day' && getStartHour(e.time) >= 17);
+    }
+  }
+
+  if (params.beforeTime) {
+    const limitH = parseInt(params.beforeTime.split(':')[0], 10) || 24;
+    events = events.filter(e => e.time === 'All Day' || getStartHour(e.time) < limitH);
+  }
+
+  if (params.afterTime) {
+    const limitH = parseInt(params.afterTime.split(':')[0], 10) || 0;
+    events = events.filter(e => e.time !== 'All Day' && getStartHour(e.time) >= limitH);
+  }
+
+  // Apply Limit / Ordering Filters
+  if (params.first && events.length > 0) {
+    events = [events[0]];
+  } else if (params.last && events.length > 0) {
+    events = [events[events.length - 1]];
+  } else if (params.limit) {
     events = events.slice(0, params.limit);
   }
 
   // Format payload for the model
   if (events.length === 0) {
-    return baseContext + `The calendar tool executed but found 0 matching events.`;
+    return baseContext + `The calendar tool executed but found 0 matching events based on the requested filters.`;
   }
 
-  const eventList = events.map(e => `- ${e.date} at ${e.time}: ${e.title}`).join('\n');
+  const eventList = events.map(e => `- ${e.date} at ${e.time}: ${e.title} (Type: ${e.type})`).join('\n');
   return baseContext + `\n\nFetched Calendar Data:\n${eventList}`;
 }
 

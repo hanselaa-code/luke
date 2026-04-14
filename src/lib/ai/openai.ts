@@ -10,9 +10,16 @@ const openai = new OpenAI({
 
 export interface CalendarToolRequest {
   requiresCalendar: boolean;
+  action?: string;
   range?: 'today' | 'tomorrow' | 'this_week' | 'upcoming';
   weekday?: string;
+  partOfDay?: 'morning' | 'afternoon' | 'evening';
+  beforeTime?: string;
+  afterTime?: string;
   keyword?: string;
+  first?: boolean;
+  last?: boolean;
+  summaryStyle?: 'full' | 'important_only';
   limit?: number;
 }
 
@@ -27,16 +34,26 @@ You MUST return a JSON object representing the tool call parameters.
 
 Keys:
 1. "requiresCalendar" (boolean): true if querying Google Calendar is necessary to answer the question.
-2. "range" (string, optional): "today" | "tomorrow" | "this_week" | "upcoming"
-3. "weekday" (string, optional): specific day like "friday", "monday"
-4. "keyword" (string, optional): title keyword to search for, e.g., "flight", "meeting"
-5. "limit" (number, optional): max number of events to fetch, e.g. 1 for "next event"
+2. "action" (string, optional): e.g., "query", "summarize"
+3. "range" (string, optional): "today" | "tomorrow" | "this_week" | "upcoming"
+4. "weekday" (string, optional): specific day like "friday", "monday"
+5. "partOfDay" (string, optional): "morning" | "afternoon" | "evening"
+6. "beforeTime" (string, optional): "HH:mm" boundary (e.g. "12:00")
+7. "afterTime" (string, optional): "HH:mm" boundary
+8. "keyword" (string, optional): title keyword to search for, e.g., "flight", "meeting"
+9. "first" (boolean, optional): true if they asked for their first event
+10. "last" (boolean, optional): true if they asked for their last event
+11. "summaryStyle" (string, optional): "full" | "important_only"
+12. "limit" (number, optional): max number of events to fetch. DO NOT use if they ask for "last" or multiple things.
 
 Examples:
 User: "What time is it?" -> {"requiresCalendar": false}
-User: "Do I have anything on Friday?" -> {"requiresCalendar": true, "weekday": "friday", "range": "this_week"}
-User: "When is my next flight?" -> {"requiresCalendar": true, "keyword": "flight", "range": "upcoming", "limit": 1}
-User: "What do I have today?" -> {"requiresCalendar": true, "range": "today"}`;
+User: "Am I free tomorrow afternoon?" -> {"requiresCalendar": true, "range": "tomorrow", "partOfDay": "afternoon"}
+User: "Summarize only important things this week" -> {"requiresCalendar": true, "range": "this_week", "summaryStyle": "important_only"}
+User: "What is my first event tomorrow?" -> {"requiresCalendar": true, "range": "tomorrow", "first": true}
+User: "What is my last event today?" -> {"requiresCalendar": true, "range": "today", "last": true}
+User: "Do I have anything before 12 on Friday?" -> {"requiresCalendar": true, "weekday": "friday", "range": "upcoming", "beforeTime": "12:00"}
+User: "When is my next flight?" -> {"requiresCalendar": true, "keyword": "flight", "range": "upcoming", "first": true}`;
 
   try {
     const response = await openai.chat.completions.create({
