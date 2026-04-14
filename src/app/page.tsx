@@ -1,6 +1,14 @@
 import { SignInButton } from '@/components/AuthButtons';
+import { auth } from '@/auth';
+import { redirect } from 'next/navigation';
 
-export default function Home() {
+export default async function Home() {
+  const session = await auth();
+  
+  if (session?.user) {
+    redirect('/chat');
+  }
+
   return (
     <div className="flex flex-col items-center justify-center min-h-[calc(100vh-8rem)] px-6 text-center">
       <div className="relative mb-8">
