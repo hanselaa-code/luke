@@ -95,10 +95,10 @@ export async function getUpcomingEvents(accessToken: string, maxResults = 10): P
 
     const events = response.data.items || [];
     return events.map(formatEvent);
-  } catch (error) {
-    console.error('Error fetching Google Calendar events:', error);
+  } catch (error: any) {
+    console.error('[DEBUG - ERROR] Google Calendar API error (getUpcomingEvents):', error.message || error);
     // Explicitly rethrow so the consuming component can handle errors gracefully
-    throw new Error('Failed to fetch calendar events from Google.');
+    throw new Error(`Google API Error: ${error.message || 'Failed to fetch calendar events'}`);
   }
 }
 

@@ -7,13 +7,22 @@ export default async function CalendarPage() {
   let events: FormattedEvent[] = [];
   let errorMsg = null;
 
+  console.log("[DEBUG] CalendarPage -> Session user present:", !!session?.user);
+  console.log("[DEBUG] CalendarPage -> Access token present in session:", !!session?.accessToken);
+
   if (session?.accessToken) {
     try {
       events = await getUpcomingEvents(session.accessToken, 15);
-    } catch (e) {
-      errorMsg = "Failed to load events. Please try reconnecting your account.";
+      console.log(`[DEBUG] CalendarPage -> Successfully fetched ${events.length} events.`);
+    } catch (e: any) {
+      console.error("[DEBUG - ERROR] CalendarPage -> Failed to get events:", e);
+      // Surface the error detail safely for diagnosis
+      errorMsg = e.message || "Failed to load events. Please try reconnecting your account.";
     }
+  } else if (session?.user) {
+    console.error("[DEBUG - ERROR] CalendarPage -> User is logged in but session.accessToken is MISSING.");
   }
+
 
   return (
     <div className="p-6 space-y-8">
