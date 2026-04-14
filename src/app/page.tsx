@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import { SignInButton } from '@/components/AuthButtons';
 
 export default function Home() {
   return (
@@ -19,15 +19,10 @@ export default function Home() {
       </p>
       
       <div className="flex flex-col gap-4 w-full max-w-xs">
-        <Link 
-          href="/chat"
-          className="bg-accent hover:bg-accent/90 text-white font-semibold py-4 px-8 rounded-2xl transition-all active:scale-95 shadow-lg shadow-indigo-500/25"
-        >
-          Get Started
-        </Link>
+        <SignInButton />
         
         <button className="bg-slate-900/50 hover:bg-slate-900 border border-slate-800 text-slate-300 font-medium py-4 px-8 rounded-2xl transition-all">
-          Already have an account?
+          Learn more
         </button>
       </div>
       
