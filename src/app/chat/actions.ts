@@ -1,36 +1,59 @@
 'use server';
 
 import { auth } from '@/auth';
-import { getTomorrowsEvents, getUpcomingEvents, FormattedEvent } from '@/lib/google/calendar';
-import { interpretCalendarIntent } from '@/lib/ai/openai';
-import { format } from 'date-fns';
+import { getTomorrowsEvents, getUpcomingEvents } from '@/lib/google/calendar';
+import { CalendarToolRequest, generateToolRequest, generateFinalResponse } from '@/lib/ai/openai';
 
-// Small wrapper utilities leveraging the existing Google Calendar functions
-async function getTodaysEvents(accessToken: string) {
-  const events = await getUpcomingEvents(accessToken, 50);
-  return events.filter(e => e.date === 'Today');
-}
+/**
+ * Single server-side tool abstraction handling all calendar query combinations.
+ */
+async function getCalendarContext(accessToken: string, params: CalendarToolRequest): Promise<string> {
+  const currentWeekDay = new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Oslo', weekday: 'long', month: 'long', day: 'numeric' }).format(new Date());
+  const timeStr = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Oslo', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
+  
+  let baseContext = `System Context: The current time is ${timeStr}. Today is ${currentWeekDay}. `;
 
-async function getNextEvent(accessToken: string) {
-  const events = await getUpcomingEvents(accessToken, 1);
-  return events.slice(0, 1);
-}
+  if (!params.requiresCalendar) {
+    return baseContext + "No calendar data was requested.";
+  }
 
-async function getNextFlightEvent(accessToken: string) {
-  const events = await getUpcomingEvents(accessToken, 100);
-  return events.find(e => e.title.toLowerCase().includes('flight'));
-}
+  // Determine standard fetch boundary
+  const fetchLimit = (params.range === 'upcoming' || params.range === 'this_week' || params.keyword) ? 50 : 20;
+  let events = await getUpcomingEvents(accessToken, fetchLimit);
 
-async function getEventsForDay(accessToken: string, day: string) {
-  const events = await getUpcomingEvents(accessToken, 50);
-  const target = day.toLowerCase().trim();
-  return events.filter(e => e.date.toLowerCase().includes(target));
+  // Apply Range & Weekday Filters
+  if (params.range === 'today') {
+    events = events.filter(e => e.date === 'Today');
+  } else if (params.range === 'tomorrow') {
+    // getTomorrowsEvents correctly bounds the 24h period 
+    events = await getTomorrowsEvents(accessToken);
+  } else if (params.weekday) {
+    const target = params.weekday.toLowerCase().trim();
+    events = events.filter(e => e.date.toLowerCase().includes(target));
+  }
+
+  // Apply Keyword Filter
+  if (params.keyword) {
+    const kw = params.keyword.toLowerCase().trim();
+    events = events.filter(e => e.title.toLowerCase().includes(kw));
+  }
+
+  // Apply Limit Filter
+  if (params.limit) {
+    events = events.slice(0, params.limit);
+  }
+
+  // Format payload for the model
+  if (events.length === 0) {
+    return baseContext + `The calendar tool executed but found 0 matching events.`;
+  }
+
+  const eventList = events.map(e => `- ${e.date} at ${e.time}: ${e.title}`).join('\n');
+  return baseContext + `\n\nFetched Calendar Data:\n${eventList}`;
 }
 
 export async function processChatInteraction(message: string) {
   console.log("CHAT ACTION STARTED");
-  console.log("OPENAI KEY EXISTS:", !!process.env.OPENAI_API_KEY);
-  console.log("OPENAI KEY LENGTH:", process.env.OPENAI_API_KEY?.length);
 
   try {
     const session = await auth();
@@ -39,76 +62,21 @@ export async function processChatInteraction(message: string) {
       return "I need to connect to your Google Calendar first. Please make sure you are signed in and have granted calendar permissions.";
     }
 
-    const { intent, day } = await interpretCalendarIntent(message);
-    console.log("AI intent:", intent);
+    // 1. Ask OpenAI to interpret the need and generate tool arguments
+    const toolRequest = await generateToolRequest(message);
+    console.log("TOOL PARAMS:", toolRequest);
 
-    switch (intent) {
-      case 'current_day': {
-        const todayStr = new Intl.DateTimeFormat('en-US', {
-          timeZone: 'Europe/Oslo',
-          weekday: 'long',
-          month: 'long',
-          day: 'numeric'
-        }).format(new Date());
-        return `Today is ${todayStr}.`;
-      }
-      case 'current_time': {
-        const timeStr = new Intl.DateTimeFormat('en-GB', {
-          timeZone: 'Europe/Oslo',
-          hour: '2-digit',
-          minute: '2-digit',
-          hour12: false
-        }).format(new Date());
-        return `The time is ${timeStr}.`;
-      }
-      case 'today': {
-        const events = await getTodaysEvents(session.accessToken);
-        if (events.length === 0) return "You have nothing scheduled today.";
-        const list = events.map(e => `• ${e.time}: ${e.title}`).join('\n');
-        return `You have ${events.length} event${events.length === 1 ? '' : 's'} today:\n${list}`;
-      }
-      case 'tomorrow': {
-        const events = await getTomorrowsEvents(session.accessToken);
-        if (events.length === 0) return "You have nothing scheduled tomorrow.";
-        const list = events.map(e => `• ${e.time}: ${e.title}`).join('\n');
-        return `You have ${events.length} event${events.length === 1 ? '' : 's'} tomorrow:\n${list}`;
-      }
-      case 'this_week':
-      case 'summary': {
-        const events = await getUpcomingEvents(session.accessToken, 15);
-        if (events.length === 0) return "Your schedule is clear for the coming days.";
-        const list = events.map(e => `• ${e.date} at ${e.time}: ${e.title}`).join('\n');
-        return `You have ${events.length} event${events.length === 1 ? '' : 's'} left this week. Here is your summary:\n${list}`;
-      }
-      case 'next_event': {
-        const events = await getNextEvent(session.accessToken);
-        if (events.length === 0) return "You have no upcoming events.";
-        const e = events[0];
-        return `Your next event is ${e.title} on ${e.date} at ${e.time}.`;
-      }
-      case 'next_flight': {
-        const flight = await getNextFlightEvent(session.accessToken);
-        if (!flight) return "You do not have any flights coming up.";
-        return `Your next flight is ${flight.title} on ${flight.date} at ${flight.time}.`;
-      }
-      case 'specific_day': {
-        if (!day) return "I'm not sure which day you mean.";
-        const events = await getEventsForDay(session.accessToken, day);
-        if (events.length === 0) return `You have nothing scheduled on ${day}.`;
-        const list = events.map(e => `• ${e.time}: ${e.title}`).join('\n');
-        return `You have ${events.length} event${events.length === 1 ? '' : 's'} on ${day}:\n${list}`;
-      }
-      case 'unknown':
-      default:
-        return "I'm still learning! Try asking me what you have today, when your next flight is, or simply what time it is.";
-    }
+    // 2. Execute the single calendar tool abstraction server-side
+    const toolContext = await getCalendarContext(session.accessToken, toolRequest);
+
+    // 3. Provide the result context to the final generation model
+    const finalResponse = await generateFinalResponse(message, toolContext);
+    
+    return finalResponse;
 
   } catch (error) {
     console.error("CHAT ERROR FULL:", error);
-    console.error(
-      "STACK:",
-      error instanceof Error ? error.stack : error
-    );
+    console.error("STACK:", error instanceof Error ? error.stack : error);
 
     // Return a plain string so Next.js does not hide the error behind a digest
     return `Server Error: ${

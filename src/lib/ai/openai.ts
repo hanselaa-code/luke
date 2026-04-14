@@ -8,46 +8,40 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-export interface CalendarIntent {
-  intent: 'current_day' | 'current_time' | 'tomorrow' | 'today' | 'this_week' | 'next_event' | 'next_flight' | 'specific_day' | 'summary' | 'unknown';
-  day: string | null;
+export interface CalendarToolRequest {
+  requiresCalendar: boolean;
+  range?: 'today' | 'tomorrow' | 'this_week' | 'upcoming';
+  weekday?: string;
+  keyword?: string;
+  limit?: number;
 }
 
 /**
- * Classifies a user's natural language request into a strongly typed calendar data intent.
- * Runs strictly server-side.
+ * Stage 1: Classify the user's query into a structured tool argument.
  */
-export async function interpretCalendarIntent(message: string): Promise<CalendarIntent> {
-  const fallback: CalendarIntent = { intent: 'unknown', day: null };
+export async function generateToolRequest(message: string): Promise<CalendarToolRequest> {
+  const fallback: CalendarToolRequest = { requiresCalendar: false };
   
-  const systemPrompt = `You are an AI assistant module for a calendar app.
-Your job is to classify the user's natural language message to determine what calendar data they want to fetch.
+  const systemPrompt = `You are an AI assistant orchestrator determining if a user's message requires checking their calendar.
+You MUST return a JSON object representing the tool call parameters.
 
-You MUST return a JSON object with exactly two keys:
-1. "intent": A string representing the action. It MUST be EXACTLY one of the following:
-   ["current_day", "current_time", "today", "tomorrow", "this_week", "next_event", "next_flight", "specific_day", "summary", "unknown"]
-2. "day": If intent is "specific_day", extract the day string (e.g., "friday", "monday"). Otherwise, provide null.
+Keys:
+1. "requiresCalendar" (boolean): true if querying Google Calendar is necessary to answer the question.
+2. "range" (string, optional): "today" | "tomorrow" | "this_week" | "upcoming"
+3. "weekday" (string, optional): specific day like "friday", "monday"
+4. "keyword" (string, optional): title keyword to search for, e.g., "flight", "meeting"
+5. "limit" (number, optional): max number of events to fetch, e.g. 1 for "next event"
 
 Examples:
-User: "What day is it today?"
-JSON: {"intent": "current_day", "day": null}
-
-User: "What time is it?"
-JSON: {"intent": "current_time", "day": null}
-
-User: "When is my next flight?"
-JSON: {"intent": "next_flight", "day": null}
-
-User: "What do I have tomorrow?"
-JSON: {"intent": "tomorrow", "day": null}
-
-User: "Do I have anything on Friday?"
-JSON: {"intent": "specific_day", "day": "friday"}`;
+User: "What time is it?" -> {"requiresCalendar": false}
+User: "Do I have anything on Friday?" -> {"requiresCalendar": true, "weekday": "friday", "range": "this_week"}
+User: "When is my next flight?" -> {"requiresCalendar": true, "keyword": "flight", "range": "upcoming", "limit": 1}
+User: "What do I have today?" -> {"requiresCalendar": true, "range": "today"}`;
 
   try {
     const response = await openai.chat.completions.create({
       model: 'gpt-4o',
-      temperature: 0.2, // Low temperature for maximum deterministic classification
+      temperature: 0.1,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: systemPrompt },
@@ -58,15 +52,39 @@ JSON: {"intent": "specific_day", "day": "friday"}`;
     const content = response.choices[0]?.message?.content;
     if (!content) return fallback;
 
-    const parsed = JSON.parse(content) as Partial<CalendarIntent>;
-    
-    return {
-      intent: (parsed.intent as CalendarIntent['intent']) || 'unknown',
-      day: parsed.day || null
-    };
+    return JSON.parse(content) as CalendarToolRequest;
 
   } catch (error) {
-    console.error('Error communicating with OpenAI (interpretCalendarIntent):', error);
+    console.error('Error generating tool request:', error);
     return fallback;
+  }
+}
+
+/**
+ * Stage 2: Final Natural Language Generation
+ */
+export async function generateFinalResponse(message: string, context: string): Promise<string> {
+  const systemPrompt = `You are Luke, a premium, helpful, concise personal assistant.
+Answer the user's message naturally based exactly on the provided tool context. 
+Be direct, helpful, and do not yap excessively. Keep formatting elegant and readable. If time context dictates it, act warmly.
+
+TOOL OR SYSTEM CONTEXT:
+${context}`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      temperature: 0.4,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: message }
+      ]
+    });
+
+    return response.choices[0]?.message?.content || "I'm sorry, I encountered an issue interpreting that.";
+
+  } catch (error) {
+    console.error('Error generating final response:', error);
+    return "I'm so sorry, I had trouble generating a response based on your calendar just now.";
   }
 }
