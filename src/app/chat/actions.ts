@@ -92,11 +92,14 @@ export async function processChatInteraction(message: string) {
 
   try {
     const session = await auth();
+    const lang = detectResponseLanguage(message);
 
     // 1. Guard against missing/expired local session state immediately
     if (!session?.accessToken) {
       console.log("CHAT BLOCKED: No valid accessToken in session.");
-      return "Your Google Calendar connection has expired. Please sign in again to continue.";
+      return lang === 'no' 
+        ? "Tilkoblingen til Google Kalender har utløpt. Vennligst logg inn på nytt for å fortsette."
+        : "Your Google Calendar connection has expired. Please sign in again to continue.";
     }
 
     // 2. Ask OpenAI to interpret the need and generate tool arguments
@@ -107,23 +110,27 @@ export async function processChatInteraction(message: string) {
     const toolContext = await getCalendarContext(session.accessToken, toolRequest);
 
     // 4. Provide the result context to the final generation model
-    const finalResponse = await generateFinalResponse(message, toolContext);
+    const finalResponse = await generateFinalResponse(message, toolContext, lang);
     
     return finalResponse;
 
   } catch (error) {
+    const lang = detectResponseLanguage(message);
+
     if (error instanceof Error && error.message === 'GOOGLE_AUTH_EXPIRED') {
       console.log("CHAT BLOCKED: Caught GOOGLE_AUTH_EXPIRED during tool execution.");
-      return "Your Google Calendar connection has expired. Please sign in again to continue.";
+      return lang === 'no' 
+        ? "Tilkoblingen til Google Kalender har utløpt. Vennligst logg inn på nytt for å fortsette."
+        : "Your Google Calendar connection has expired. Please sign in again to continue.";
     }
 
     console.error("CHAT ERROR FULL:", error);
     console.error("STACK:", error instanceof Error ? error.stack : error);
 
     // Return a plain string so Next.js does not hide the error behind a digest
-    return `Server Error: ${
-      error instanceof Error ? error.message : String(error)
-    }`;
+    return lang === 'no'
+      ? `Serverfeil: ${error instanceof Error ? error.message : String(error)}`
+      : `Server Error: ${error instanceof Error ? error.message : String(error)}`;
   }
 }
 

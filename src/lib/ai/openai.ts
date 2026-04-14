@@ -77,13 +77,31 @@ User: "When is my next flight?" -> {"requiresCalendar": true, "keyword": "flight
   }
 }
 
+export function detectResponseLanguage(msg: string): 'no' | 'en' {
+  const norwegianWords = ['hva', 'når', 'hvem', 'hvordan', 'hvilken', 'hvilket', 'har', 'jeg', 'er', 'på', 'til', 'om', 'i', 'dag', 'morgen', 'kveld', 'uke', 'helg', 'hei', 'hallo', 'møte', 'neste', 'mitt', 'mine', 'noe', 'ingenting', 'fly', 'flyreise', 'kjedelig', 'rolig', 'avtale', 'jobb', 'fritid'];
+  const words = msg.toLowerCase().replace(/[^a-zæøå]/g, ' ').split(/\s+/);
+  
+  let noScore = 0;
+  for (const w of words) {
+    if (norwegianWords.includes(w)) noScore++;
+  }
+  
+  return noScore > 0 ? 'no' : 'en';
+}
+
 /**
  * Stage 2: Final Natural Language Generation
  */
-export async function generateFinalResponse(message: string, context: string): Promise<string> {
+export async function generateFinalResponse(message: string, context: string, lang: 'no' | 'en'): Promise<string> {
+  const langRule = lang === 'no' 
+    ? "IMPORTANT: The user wrote in Norwegian. You MUST reply ONLY in natural Norwegian Bokmål. NEVER use Danish or English."
+    : "IMPORTANT: The user wrote in English. You MUST reply ONLY in English. NEVER use Danish or Norwegian.";
+
   const systemPrompt = `You are Luke, a premium, helpful, concise personal assistant.
 Answer the user's message naturally based exactly on the provided tool context. 
 Be direct, helpful, and do not yap excessively. Keep formatting elegant and readable. If time context dictates it, act warmly.
+
+${langRule}
 
 TOOL OR SYSTEM CONTEXT:
 ${context}`;
@@ -98,10 +116,13 @@ ${context}`;
       ]
     });
 
-    return response.choices[0]?.message?.content || "I'm sorry, I encountered an issue interpreting that.";
+    return response.choices[0]?.message?.content || 
+      (lang === 'no' ? "Beklager, jeg hadde problemer med å tolke det." : "I'm sorry, I encountered an issue interpreting that.");
 
   } catch (error) {
     console.error('Error generating final response:', error);
-    return "I'm so sorry, I had trouble generating a response based on your calendar just now.";
+    return lang === 'no' 
+      ? "Beklager, jeg hadde problemer med å generere et svar fra kalenderen din akkurat nå." 
+      : "I'm so sorry, I had trouble generating a response based on your calendar just now.";
   }
 }
