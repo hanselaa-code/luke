@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
+import { processChatInteraction } from './actions';
 
 const initialMessages = [
   {
@@ -20,42 +21,57 @@ const suggestions = [
 export default function ChatPage() {
   const [messages, setMessages] = useState(initialMessages);
   const [inputValue, setInputValue] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const handleSuggestionClick = (suggestion: string) => {
     setInputValue(suggestion);
   };
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!inputValue.trim()) return;
 
+    const currentInput = inputValue;
     const userMessage = {
       id: messages.length + 1,
       role: 'user',
-      content: inputValue,
+      content: currentInput,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
 
-    setMessages([...messages, userMessage]);
+    setMessages(prev => [...prev, userMessage]);
     setInputValue('');
+    setIsTyping(true);
 
-    // Mock assistant response
-    setTimeout(() => {
+    try {
+      const responseText = await processChatInteraction(currentInput);
+      
       const assistantMessage = {
-        id: messages.length + 2,
+        id: Date.now(), // Use unique ID to prevent key collision issues with fast inputs
         role: 'assistant',
-        content: "I'm a mock assistant for now, but I'll soon be able to help with that!",
+        content: responseText,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
-      setMessages((prev) => [...prev, assistantMessage]);
-    }, 1000);
+      
+      setMessages(prev => [...prev, assistantMessage]);
+    } catch (e) {
+       const errorMessage = {
+        id: Date.now(),
+        role: 'assistant',
+        content: "Oops, something went wrong communicating with the server.",
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+      setMessages(prev => [...prev, errorMessage]);
+    } finally {
+      setIsTyping(false);
+    }
   };
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [messages, isTyping]);
 
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)]">
@@ -76,7 +92,7 @@ export default function ChatPage() {
                   : 'bg-card border border-border text-foreground rounded-tl-none'
               }`}
             >
-              <p className="text-sm leading-relaxed">{msg.content}</p>
+              <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
               <span className={`text-[10px] mt-1 block opacity-60 ${msg.role === 'user' ? 'text-right' : 'text-left'}`}>
                 {msg.timestamp}
               </span>
