@@ -93,23 +93,30 @@ export async function processChatInteraction(message: string) {
   try {
     const session = await auth();
 
+    // 1. Guard against missing/expired local session state immediately
     if (!session?.accessToken) {
-      return "I need to connect to your Google Calendar first. Please make sure you are signed in and have granted calendar permissions.";
+      console.log("CHAT BLOCKED: No valid accessToken in session.");
+      return "Your Google Calendar connection has expired. Please sign in again to continue.";
     }
 
-    // 1. Ask OpenAI to interpret the need and generate tool arguments
+    // 2. Ask OpenAI to interpret the need and generate tool arguments
     const toolRequest = await generateToolRequest(message);
     console.log("TOOL PARAMS:", toolRequest);
 
-    // 2. Execute the single calendar tool abstraction server-side
+    // 3. Execute the single calendar tool abstraction server-side
     const toolContext = await getCalendarContext(session.accessToken, toolRequest);
 
-    // 3. Provide the result context to the final generation model
+    // 4. Provide the result context to the final generation model
     const finalResponse = await generateFinalResponse(message, toolContext);
     
     return finalResponse;
 
   } catch (error) {
+    if (error instanceof Error && error.message === 'GOOGLE_AUTH_EXPIRED') {
+      console.log("CHAT BLOCKED: Caught GOOGLE_AUTH_EXPIRED during tool execution.");
+      return "Your Google Calendar connection has expired. Please sign in again to continue.";
+    }
+
     console.error("CHAT ERROR FULL:", error);
     console.error("STACK:", error instanceof Error ? error.stack : error);
 

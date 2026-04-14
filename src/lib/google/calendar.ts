@@ -104,8 +104,13 @@ export async function getUpcomingEvents(accessToken: string, maxResults = 10): P
 
     return events.map(formatEvent);
   } catch (error: any) {
+    const errorMsg = error.message?.toLowerCase() || String(error).toLowerCase();
     console.error('[DEBUG - ERROR] Google Calendar API error (getUpcomingEvents):', error.message || error);
-    // Explicitly rethrow so the consuming component can handle errors gracefully
+    
+    if (errorMsg.includes('401') || errorMsg.includes('credential') || errorMsg.includes('unauthorized') || errorMsg.includes('auth')) {
+      throw new Error('GOOGLE_AUTH_EXPIRED');
+    }
+
     throw new Error(`Google API Error: ${error.message || 'Failed to fetch calendar events'}`);
   }
 }
@@ -138,8 +143,14 @@ export async function getTomorrowsEvents(accessToken: string): Promise<Formatted
     });
 
     return events.map(formatEvent);
-  } catch (error) {
+  } catch (error: any) {
+    const errorMsg = error.message?.toLowerCase() || String(error).toLowerCase();
     console.error('Error fetching tomorrow\'s events:', error);
+
+    if (errorMsg.includes('401') || errorMsg.includes('credential') || errorMsg.includes('unauthorized') || errorMsg.includes('auth')) {
+      throw new Error('GOOGLE_AUTH_EXPIRED');
+    }
+
     throw new Error('Failed to fetch tomorrow\'s events from Google.');
   }
 }
