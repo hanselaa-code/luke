@@ -28,10 +28,6 @@ export default async function Home() {
       
       <div className="flex flex-col gap-4 w-full max-w-xs">
         <SignInButton />
-        
-        <button className="bg-slate-900/50 hover:bg-slate-900 border border-slate-800 text-slate-300 font-medium py-4 px-8 rounded-2xl transition-all">
-          Learn more
-        </button>
       </div>
       
       <div className="mt-16 grid grid-cols-3 gap-8 text-slate-500">
