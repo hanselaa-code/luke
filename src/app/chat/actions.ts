@@ -31,13 +31,17 @@ function formatEventsResponse(events: FormattedEvent[], timeContext: string) {
 }
 
 export async function processChatInteraction(message: string) {
-  const session = await auth();
-
-  if (!session?.accessToken) {
-    return "I need to connect to your Google Calendar first. Please make sure you are signed in and have granted calendar permissions.";
-  }
+  console.log("CHAT ACTION STARTED");
+  console.log("OPENAI KEY EXISTS:", !!process.env.OPENAI_API_KEY);
+  console.log("OPENAI KEY LENGTH:", process.env.OPENAI_API_KEY?.length);
 
   try {
+    const session = await auth();
+
+    if (!session?.accessToken) {
+      return "I need to connect to your Google Calendar first. Please make sure you are signed in and have granted calendar permissions.";
+    }
+
     const { intent, day } = await interpretCalendarIntent(message);
     console.log("AI intent:", intent);
 
@@ -79,8 +83,13 @@ export async function processChatInteraction(message: string) {
     return formatEventsResponse(events, timeContext);
 
   } catch (error) {
-    console.error("CHAT ERROR:", error);
+    console.error("CHAT ERROR FULL:", error);
+    console.error(
+      "STACK:",
+      error instanceof Error ? error.stack : error
+    );
 
+    // Return a plain string so Next.js does not hide the error behind a digest
     return `Server Error: ${
       error instanceof Error ? error.message : String(error)
     }`;
