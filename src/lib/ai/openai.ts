@@ -48,7 +48,8 @@ export async function generateToolRequest(messages: {role: 'user' | 'assistant',
 You MUST return a JSON object representing the tool call parameters.
 
 LOCAL TIME CONTEXT: The exact current time in Europe/Oslo is ${timePart}. Today is ${datePart}.
-CRITICAL RULE: If the user provides a follow-up reference (e.g., "Hva med tirsdag?"), you MUST look at the conversational history to resolve exactly WHICH Tuesday they mean based on the timeline, and explicitly use the target "date" string in "YYYY-MM-DD" format. Do not guess aimlessly.
+CRITICAL RULE: If the user provides a follow-up reference like "den", "det", "denne", or "it", you MUST look at the conversational history to identify which specific event was last discussed. If the user asks to "move it", they usually refer to the event that the assistant just fetched or described.
+RESOLVE RELATIVE TIME: For requests like "flytt den en time frem" or "neste trening", calculate the target based on the grounded logic. "After [Event]" means fetching the event first or identifying its end time.
 
 Keys:
 1. "requiresCalendar" (boolean): true if querying or modifying Google Calendar is necessary.
@@ -67,41 +68,20 @@ Keys:
 14. "date" (string, optional): exact "YYYY-MM-DD" target.
 15. "title" (string, optional): The title of the event for "create_calendar_event".
 16. "startTime" (string, optional): "HH:mm" for event creation.
-17. "endTime" (string, optional): "HH:mm" for event creation or requested new end time for event updates. If the user provides an explicit end time, include it and do not replace it with durationMinutes.
+17. "endTime" (string, optional): "HH:mm" for event creation or requested new end time for event updates.
 18. "targetStartTime" / "targetEndTime" (string, optional): existing event time when the user says "from 10:15-12:37".
 19. "newTitle" (string, optional): new title only if the user clearly asks to rename the event.
-20. "newDate" (string, optional): new event date for update requests. Use "date" for the existing event date/context, and "newDate" for the requested destination date.
+20. "newDate" (string, optional): new event date for update requests.
 
 SPECIAL FLOWS:
-- CREATE: If the user wants to add, book, or schedule an event (e.g., "legg inn møte", "book time"), use action "create_calendar_event". Extract title, date, and startTime if possible.
-- CONFIRM: If the user says "ja", "ok", "gjør det", "confirm" in response to an assistant proposing to create an event, use action "confirm_create".
-- CANCEL: If the user says "nei", "stopp", "avbryt", "cancel" in response to a proposed event, use action "cancel_create".
+- CREATE: If the user wants to add, book, or schedule an event, use action "create_calendar_event".
+- CONFIRM / CANCEL: Use the appropriate action for confirm/cancel in create, update, or delete flows.
 
 UPDATE FLOWS:
-- If the user wants to move, change, rename, or update exactly one existing event, use action "update_calendar_event". Put the existing event title/search phrase in "title", existing date in "date" if known, existing time in targetStartTime/targetEndTime if known, and requested new values in newDate/startTime/endTime/newTitle.
-- If the user says "ja", "ok", "gjÃ¸r det", "confirm" in response to an assistant proposing an update, use action "confirm_update".
-- If the user says "nei", "stopp", "avbryt", "cancel" in response to a proposed update, use action "cancel_update".
+- If the user wants to move, change, rename, or update exactly one existing event, use action "update_calendar_event".
 
 DELETE FLOWS:
-- If the user wants to delete, remove, or cancel exactly one existing event, use action "delete_calendar_event". Put the existing event title/search phrase in "title", existing date in "date" if known, and existing time in targetStartTime/targetEndTime or startTime/endTime if known.
-- If the user asks to delete all events, clear the calendar, wipe a day/week, or remove everything, do not use delete_calendar_event.
-- If the user says "ja", "ok", "gjÃƒÂ¸r det", "confirm" in response to an assistant proposing a deletion, use action "confirm_delete".
-- If the user says "nei", "stopp", "avbryt", "cancel" in response to a proposed deletion, use action "cancel_delete".
-
-Examples:
-User: "Flytt mÃ¸tet med Kari til 14:30" -> {"requiresCalendar": true, "action": "update_calendar_event", "title": "Kari", "startTime": "14:30"}
-User: "Endre skolebesÃ¸k Valencia fra 10:15-12:37 til 11:00-13:00" -> {"requiresCalendar": true, "action": "update_calendar_event", "title": "skolebesÃ¸k Valencia", "targetStartTime": "10:15", "targetEndTime": "12:37", "startTime": "11:00", "endTime": "13:00"}
-History: [Assistant: "Jeg fant denne avtalen... Vil du at jeg skal endre den...", User: "ja"] -> {"requiresCalendar": true, "action": "confirm_update"}
-User: "Slett mÃƒÂ¸tet med Kari i morgen" -> {"requiresCalendar": true, "action": "delete_calendar_event", "title": "Kari", "date": "YYYY-MM-DD for tomorrow"}
-User: "Slett treningen klokka 18 i kveld" -> {"requiresCalendar": true, "action": "delete_calendar_event", "title": "trening", "date": "YYYY-MM-DD for today", "targetStartTime": "18:00"}
-History: [Assistant: "Jeg fant denne avtalen... Vil du at jeg skal slette denne avtalen?", User: "ja"] -> {"requiresCalendar": true, "action": "confirm_delete"}
-User: "What time is it?" -> {"requiresCalendar": false}
-User: "Am I free tomorrow afternoon?" -> {"requiresCalendar": true, "range": "tomorrow", "partOfDay": "afternoon"}
-User: "Train from 11:09 to 13:47 Friday" -> {"requiresCalendar": true, "action": "create_calendar_event", "title": "Train", "date": "YYYY-MM-DD for Friday", "startTime": "11:09", "endTime": "13:47"}
-User: "Legg inn møte med Per fredag kl 14" -> {"requiresCalendar": true, "action": "create_calendar_event", "title": "Møte med Per", "date": "YYYY-MM-DD for Friday", "startTime": "14:00", "durationMinutes": 60}
-History: [Assistant: "Jeg kan opprette følgende avtale: Møte med Per...", User: "ja"] -> {"requiresCalendar": true, "action": "confirm_create"}
-History: [Assistant: "Jeg kan opprette følgende avtale: ...", User: "nei"] -> {"requiresCalendar": true, "action": "cancel_create"}
-User: "Sett opp avtale i morgen" -> {"requiresCalendar": true, "action": "create_calendar_event", "date": "YYYY-MM-DD for tomorrow"} (Note: startTime is missing, this is fine, Stage 2 will handle it).
+- If the user wants to delete, remove, or cancel exactly one existing event, use action "delete_calendar_event".
 `;
 
   try {
@@ -126,18 +106,10 @@ User: "Sett opp avtale i morgen" -> {"requiresCalendar": true, "action": "create
 
 export function detectResponseLanguage(msg: string): 'no' | 'en' {
   const lower = msg.toLowerCase();
-  if (/\b(kan|du|t[\u00f8o]mme|slette|slett|fjern|kalenderen|avtaler)\b/u.test(lower)) {
-    return 'no';
-  }
-
-  const norwegianWords = ['hva', 'når', 'hvem', 'hvordan', 'hvilken', 'hvilket', 'har', 'jeg', 'er', 'på', 'til', 'om', 'i', 'dag', 'morgen', 'kveld', 'uke', 'helg', 'hei', 'hallo', 'møte', 'neste', 'mitt', 'mine', 'noe', 'ingenting', 'fly', 'flyreise', 'kjedelig', 'rolig', 'avtale', 'jobb', 'fritid'];
-  const words = msg.toLowerCase().replace(/[^a-zæøå]/g, ' ').split(/\s+/);
-  
+  const norwegianWords = ['hva', 'når', 'hvem', 'hvordan', 'hvilken', 'hvilket', 'har', 'jeg', 'er', 'på', 'til', 'om', 'i', 'dag', 'morgen', 'kveld', 'uke', 'helg', 'hei', 'hallo', 'møte', 'neste', 'mitt', 'mine', 'noe', 'ingenting', 'fly', 'flyreise', 'kjedelig', 'rolig', 'avtale', 'jobb', 'fritid', 'flytt', 'slett', 'endre', 'legg', 'book', 'sett'];
+  const words = lower.replace(/[^a-zæøå]/g, ' ').split(/\s+/);
   let noScore = 0;
-  for (const w of words) {
-    if (norwegianWords.includes(w)) noScore++;
-  }
-  
+  for (const w of words) if (norwegianWords.includes(w)) noScore++;
   return noScore > 0 ? 'no' : 'en';
 }
 
@@ -149,27 +121,27 @@ export async function generateFinalResponse(messages: {role: 'user' | 'assistant
   const strNow = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Oslo', year: 'numeric', month: 'numeric', day: 'numeric', weekday: 'long' }).format(osloNow);
 
   const langRule = lang === 'no' 
-    ? "IMPORTANT: The user wrote in Norwegian. You MUST reply ONLY in natural Norwegian Bokmål. NEVER use Danish or English."
-    : "IMPORTANT: The user wrote in English. You MUST reply ONLY in English. NEVER use Danish or Norwegian.";
+    ? "IMPORTANT: You MUST reply ONLY in natural Norwegian Bokmål. NEVER use Danish or English."
+    : "IMPORTANT: You MUST reply ONLY in English.";
 
-  const finalSystemPrompt = `You are an executive personal assistant named Luke.
+  const finalSystemPrompt = `You are an executive assistant named Luke.
 You are concise, professional, but friendly.
 
 CRITICAL BEHAVIOR RULES:
 1. ${langRule}
-2. CURRENT DATE GROUNDING: Today is ${strNow} local time. NEVER reason about dates as if it is a different day.
-3. CONVERSATIONAL ANCHORING: If the context fetched from the tool refers to one specific day, ONLY answer about that specific day. Do not ramble into other days unless the user asked a multi-day question like "this week".
-4. MULTI-DAY SUMMARIES: If the user asked about a whole week, provide a useful summary of the week's availability or business. Do not answer by only mentioning Monday.
-5. PAST DATE REJECTION: If the system context flags that a requested date is in the past, or if you notice you are suggesting a slot that occurred prior to ${strNow}, immediately apologize and inform the user that the date has passed naturally. DO NOT suggest passed dates.
-6. EVENT CREATION CONFIRMATION: If the system context indicates a pending event (PENDING_CREATE), you MUST present a summary using this EXACT format (in the requested language):
+2. CURRENT DATE GROUNDING: Today is ${strNow}. Never reason about dates as if it is a different day.
+3. CONVERSATIONAL ANCHORING: If the context refers to one specific day, focus your answer on that day.
+4. NATURAL OVERVIEW: When describing a day or week, be concise and use professional Norwegian idioms. Example: "Det krasjer med..." or "Du har hele formiddagen ledig."
+5. CONFLICT HANDLING: If the tool context contains CONFLICT WARNINGS, you MUST explicitly mention these overlaps clearly.
+6. EVENT CREATION CONFIRMATION: If the context indicates a pending event, you MUST present a summary like this:
    "Jeg kan opprette følgende avtale:
    Møte: [Title]
    Dato: [Weekday] [Day]. [Month]
    Tid: [Start]–[End]
    Vil du at jeg skal legge dette inn i kalenderen?"
-7. CLARIFICATION RULE: If scheduling details (date or time) are missing for a creation request, do NOT guess. Ask a short clarification question (e.g., "Hvilket tidspunkt...?", "Hvilken dag...?").
+7. CLARIFICATION RULE: If scheduling details are missing, do NOT guess. Ask a short clarification question.
 
-TOOL OR SYSTEM CONTEXT:
+TOOL CONTEXT:
 ${systemContext}`;
 
   try {
@@ -181,14 +153,9 @@ ${systemContext}`;
         ...messages
       ]
     });
-
-    return response.choices[0]?.message?.content || 
-      (lang === 'no' ? "Beklager, jeg hadde problemer med å tolke det." : "I'm sorry, I encountered an issue interpreting that.");
-
+    return response.choices[0]?.message?.content || "Error generating response.";
   } catch (error) {
     console.error('Error generating final response:', error);
-    return lang === 'no' 
-      ? "Beklager, jeg hadde problemer med å generere et svar fra kalenderen din akkurat nå." 
-      : "I'm so sorry, I had trouble generating a response based on your calendar just now.";
+    return "Beklager, det oppsto en feil.";
   }
 }
