@@ -4,6 +4,7 @@ import { auth } from '@/auth';
 import { cookies } from 'next/headers';
 import { getTomorrowsEvents, getUpcomingEvents, getOsloBounds, getFreeSlots, createCalendarEvent, updateCalendarEvent, deleteCalendarEvent, FormattedEvent } from '@/lib/google/calendar';
 import { getEmailSummaries, getUnreadEmails, getFullEmailContent } from '@/lib/google/gmail';
+import { getTravelAgentResponse } from '@/lib/agents/travel';
 import { LukeToolRequest, generateToolRequest, generateFinalResponse, detectResponseLanguage } from '@/lib/ai/openai';
 
 function getStartHour(timeStr: string): number {
@@ -479,6 +480,17 @@ async function getCalendarContext(accessToken: string, params: LukeToolRequest):
   return final;
 }
 
+async function getTravelContext(accessToken: string, params: LukeToolRequest): Promise<string> {
+  const { travelAction, travelDestination, travelQuery } = params;
+  
+  // Optional: We could peek at the calendar for upcoming trips here in the future
+  return await getTravelAgentResponse({
+    action: travelAction,
+    destination: travelDestination,
+    query: travelQuery,
+  });
+}
+
 async function getGmailContext(accessToken: string, params: LukeToolRequest): Promise<string> {
   const { gmailAction, emailFilter, unreadOnly, limit = 5, emailId, emailIndex } = params;
   const cookieStore = await cookies();
@@ -572,8 +584,13 @@ export async function processChatInteraction(messages: {role: 'user' | 'assistan
       combinedContext += (combinedContext ? "\n\n" : "") + gmailContext;
     }
 
+    if (toolReq.requiresTravel) {
+      const travelContext = await getTravelContext(session.accessToken, toolReq);
+      combinedContext += (combinedContext ? "\n\n" : "") + travelContext;
+    }
+
     // Fallback if neither was triggered but should have been
-    if (!toolReq.requiresCalendar && !toolReq.requiresGmail) {
+    if (!toolReq.requiresCalendar && !toolReq.requiresGmail && !toolReq.requiresTravel) {
        return getUnsupportedQuestionReply(lang);
     }
 
@@ -587,6 +604,13 @@ export async function processChatInteraction(messages: {role: 'user' | 'assistan
       return lang === 'no' 
         ? "Jeg trenger tilgang til e-posten din for å svare på dette. Vennligst logg ut og logg inn igjen for å gi Luke tillatelse til å se e-poster."
         : "I need access to your email to answer this. Please sign out and sign in again to grant Luke permission to see emails.";
+    }
+
+    // Handle missing location for travel
+    if (combinedContext.includes("MISSING_LOCATION")) {
+        return lang === 'no'
+          ? "Hvilken by eller hvilket sted tenker du på? Jeg trenger å vite hvor du er eller hvor du skal for å gi deg de beste tipsene."
+          : "Which city or place are you thinking of? I need to know your location or destination to give you the best advice.";
     }
 
     return await generateFinalResponse(messages, combinedContext, lang);
