@@ -10,7 +10,7 @@ const openai = new OpenAI({
 
 export interface CalendarToolRequest {
   requiresCalendar: boolean;
-  action?: 'query' | 'summarize' | 'suggest' | 'create_calendar_event' | 'confirm_create' | 'cancel_create' | 'update_calendar_event' | 'confirm_update' | 'cancel_update';
+  action?: 'query' | 'summarize' | 'suggest' | 'create_calendar_event' | 'confirm_create' | 'cancel_create' | 'update_calendar_event' | 'confirm_update' | 'cancel_update' | 'delete_calendar_event' | 'confirm_delete' | 'cancel_delete';
   range?: 'today' | 'tomorrow' | 'this_week' | 'next_week' | 'this_month' | 'upcoming';
   weekday?: string;
   date?: string;
@@ -52,7 +52,7 @@ CRITICAL RULE: If the user provides a follow-up reference (e.g., "Hva med tirsda
 
 Keys:
 1. "requiresCalendar" (boolean): true if querying or modifying Google Calendar is necessary.
-2. "action" (string, optional): "query", "summarize", "suggest", "create_calendar_event", "confirm_create", "cancel_create", "update_calendar_event", "confirm_update", "cancel_update"
+2. "action" (string, optional): "query", "summarize", "suggest", "create_calendar_event", "confirm_create", "cancel_create", "update_calendar_event", "confirm_update", "cancel_update", "delete_calendar_event", "confirm_delete", "cancel_delete"
 3. "range" (string, optional): "today" | "tomorrow" | "this_week" | "next_week" | "this_month" | "upcoming"
 4. "weekday" (string, optional): specific day like "friday", "monday"
 5. "partOfDay" (string, optional): "morning" | "afternoon" | "evening"
@@ -82,10 +82,19 @@ UPDATE FLOWS:
 - If the user says "ja", "ok", "gjÃ¸r det", "confirm" in response to an assistant proposing an update, use action "confirm_update".
 - If the user says "nei", "stopp", "avbryt", "cancel" in response to a proposed update, use action "cancel_update".
 
+DELETE FLOWS:
+- If the user wants to delete, remove, or cancel exactly one existing event, use action "delete_calendar_event". Put the existing event title/search phrase in "title", existing date in "date" if known, and existing time in targetStartTime/targetEndTime or startTime/endTime if known.
+- If the user asks to delete all events, clear the calendar, wipe a day/week, or remove everything, do not use delete_calendar_event.
+- If the user says "ja", "ok", "gjÃƒÂ¸r det", "confirm" in response to an assistant proposing a deletion, use action "confirm_delete".
+- If the user says "nei", "stopp", "avbryt", "cancel" in response to a proposed deletion, use action "cancel_delete".
+
 Examples:
 User: "Flytt mÃ¸tet med Kari til 14:30" -> {"requiresCalendar": true, "action": "update_calendar_event", "title": "Kari", "startTime": "14:30"}
 User: "Endre skolebesÃ¸k Valencia fra 10:15-12:37 til 11:00-13:00" -> {"requiresCalendar": true, "action": "update_calendar_event", "title": "skolebesÃ¸k Valencia", "targetStartTime": "10:15", "targetEndTime": "12:37", "startTime": "11:00", "endTime": "13:00"}
 History: [Assistant: "Jeg fant denne avtalen... Vil du at jeg skal endre den...", User: "ja"] -> {"requiresCalendar": true, "action": "confirm_update"}
+User: "Slett mÃƒÂ¸tet med Kari i morgen" -> {"requiresCalendar": true, "action": "delete_calendar_event", "title": "Kari", "date": "YYYY-MM-DD for tomorrow"}
+User: "Slett treningen klokka 18 i kveld" -> {"requiresCalendar": true, "action": "delete_calendar_event", "title": "trening", "date": "YYYY-MM-DD for today", "targetStartTime": "18:00"}
+History: [Assistant: "Jeg fant denne avtalen... Vil du at jeg skal slette denne avtalen?", User: "ja"] -> {"requiresCalendar": true, "action": "confirm_delete"}
 User: "What time is it?" -> {"requiresCalendar": false}
 User: "Am I free tomorrow afternoon?" -> {"requiresCalendar": true, "range": "tomorrow", "partOfDay": "afternoon"}
 User: "Train from 11:09 to 13:47 Friday" -> {"requiresCalendar": true, "action": "create_calendar_event", "title": "Train", "date": "YYYY-MM-DD for Friday", "startTime": "11:09", "endTime": "13:47"}

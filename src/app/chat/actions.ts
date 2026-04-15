@@ -2,7 +2,7 @@
 
 import { auth } from '@/auth';
 import { cookies } from 'next/headers';
-import { getTomorrowsEvents, getUpcomingEvents, getOsloBounds, getFreeSlots, createCalendarEvent, updateCalendarEvent, FormattedEvent } from '@/lib/google/calendar';
+import { getTomorrowsEvents, getUpcomingEvents, getOsloBounds, getFreeSlots, createCalendarEvent, updateCalendarEvent, deleteCalendarEvent, FormattedEvent } from '@/lib/google/calendar';
 import { CalendarToolRequest, generateToolRequest, generateFinalResponse, detectResponseLanguage } from '@/lib/ai/openai';
 
 function getStartHour(timeStr: string): number {
@@ -27,9 +27,9 @@ function getUnsupportedDestructiveReply(lang: 'no' | 'en'): string {
 function isUnsupportedDestructiveRequest(message: string): boolean {
   const normalized = message.toLowerCase();
   return [
-    /t[\u00f8o]mme\s+(kalender|calendar)/,
-    /slett(e)?\s+(alle|alt|kalender)/,
-    /fjern\s+(alle|alt|kalender)/,
+    /t[\u00f8o]m(me)?\s+(kalender(en)?|calendar)/,
+    /slett(e)?\s+(alle|alt|kalender(en)?)/,
+    /fjern\s+(alle|alt|kalender(en)?)/,
     /clear\s+(the\s+)?calendar/,
     /delete\s+(all|everything|the\s+calendar)/,
     /wipe\s+(a\s+day|the\s+day|everything|calendar)/,
@@ -143,6 +143,14 @@ interface PendingUpdate {
   newEndTime: string;
 }
 
+interface PendingDelete {
+  eventId: string;
+  title: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+}
+
 function getOsloDateFromIso(iso?: string): string | null {
   if (!iso) return null;
   return new Intl.DateTimeFormat('sv-SE', {
@@ -194,14 +202,41 @@ function findUpdateMatches(events: FormattedEvent[], params: CalendarToolRequest
     const eventDate = getOsloDateFromIso(event.startIso);
     const eventStart = getOsloTimeFromIso(event.startIso);
     const eventEnd = getOsloTimeFromIso(event.endIso);
+    const targetStartTime = params.targetStartTime || (params.action === 'delete_calendar_event' ? params.startTime : undefined);
+    const targetEndTime = params.targetEndTime || (params.action === 'delete_calendar_event' ? params.endTime : undefined);
 
     if (!titleMatches(event.title, params.title)) return false;
     if (params.date && eventDate !== params.date) return false;
-    if (params.targetStartTime && eventStart !== params.targetStartTime) return false;
-    if (params.targetEndTime && eventEnd !== params.targetEndTime) return false;
+    if (targetStartTime && eventStart !== targetStartTime) return false;
+    if (targetEndTime && eventEnd !== targetEndTime) return false;
 
     return !!eventDate && !!eventStart && !!eventEnd;
   });
+}
+
+function hasDeleteLookupDetail(params: CalendarToolRequest): boolean {
+  return !!(params.title || params.date || params.startTime || params.endTime || params.targetStartTime || params.targetEndTime);
+}
+
+function buildPendingDelete(event: FormattedEvent): PendingDelete | null {
+  const date = getOsloDateFromIso(event.startIso);
+  const startTime = getOsloTimeFromIso(event.startIso);
+  const endTime = getOsloTimeFromIso(event.endIso);
+  if (!date || !startTime || !endTime) return null;
+
+  return {
+    eventId: event.id,
+    title: event.title,
+    date,
+    startTime,
+    endTime,
+  };
+}
+
+function formatDeleteDetails(event: PendingDelete): string {
+  return `M\u00f8te: ${event.title}
+Dato: ${formatOsloDateLabel(event.date, 'no')}
+Tid: ${event.startTime}\u2013${event.endTime}`;
 }
 
 function buildPendingUpdate(event: FormattedEvent, params: CalendarToolRequest): PendingUpdate | null {
@@ -272,6 +307,38 @@ function getDeterministicUpdateReply(toolContext: string): string | null {
   return null;
 }
 
+function getDeterministicDeleteReply(toolContext: string): string | null {
+  if (toolContext.startsWith('[DELETE_NO_MATCH]')) {
+    return "Beklager, jeg fant ingen avtale som passer med det du ba om. Kan du skrive navnet, datoen eller tidspunktet litt mer presist?";
+  }
+
+  if (toolContext.startsWith('[DELETE_MISSING_TARGET]')) {
+    return "Hvilken avtale vil du slette? Oppgi gjerne navn, dato eller tidspunkt.";
+  }
+
+  if (toolContext.startsWith('[DELETE_MULTIPLE]')) {
+    return toolContext.replace('[DELETE_MULTIPLE]\n', '');
+  }
+
+  if (toolContext.startsWith('[PENDING_DELETE]')) {
+    return toolContext.replace('[PENDING_DELETE]\n', '');
+  }
+
+  if (toolContext.startsWith('[DELETE_NOT_ALLOWED]')) {
+    return "Beklager, jeg fant avtalen, men Google Kalender tillater ikke at jeg sletter den. Den kan v\u00e6re fra en synkronisert eller skrivebeskyttet kalender.";
+  }
+
+  if (toolContext.startsWith('[DELETE_SUCCESS]')) {
+    return toolContext.replace('[DELETE_SUCCESS]\n', '');
+  }
+
+  if (toolContext.startsWith('[DELETE_CANCELLED]')) {
+    return toolContext.replace('[DELETE_CANCELLED]\n', '');
+  }
+
+  return null;
+}
+
 /**
  * Single server-side tool abstraction handling all calendar query combinations.
  */
@@ -287,6 +354,49 @@ async function getCalendarContext(accessToken: string, params: CalendarToolReque
 
   if (!params.requiresCalendar) {
     return baseContext + "The user's question is outside the supported calendar scope. Reply with the concise fallback guidance in the user's language.";
+  }
+
+  if (params.action === 'delete_calendar_event') {
+    if (!hasDeleteLookupDetail(params)) {
+      return "[DELETE_MISSING_TARGET]";
+    }
+
+    const timeMin = params.date ? getOsloDayBounds(params.date).timeMin : undefined;
+    const timeMax = params.date ? getOsloDayBounds(params.date).timeMax : undefined;
+    const events = await getUpcomingEvents(accessToken, params.date ? 100 : 200, timeMin, timeMax);
+    const matches = findUpdateMatches(events, params);
+
+    if (matches.length === 0) {
+      return "[DELETE_NO_MATCH]";
+    }
+
+    if (matches.length > 1) {
+      const choices = matches.slice(0, 5).map((event, index) => {
+        const date = getOsloDateFromIso(event.startIso);
+        const start = getOsloTimeFromIso(event.startIso);
+        const end = getOsloTimeFromIso(event.endIso);
+        const dateLabel = date ? formatOsloDateLabel(date, 'no') : event.date;
+        return `${index + 1}. ${event.title} - ${dateLabel} ${start || ''}${end ? `\u2013${end}` : ''}`;
+      }).join('\n');
+
+      return `[DELETE_MULTIPLE]
+Jeg fant flere avtaler som kan passe. Hvilken vil du slette?
+${choices}`;
+    }
+
+    const pendingDelete = buildPendingDelete(matches[0]);
+    if (!pendingDelete) {
+      return "[DELETE_NO_MATCH]";
+    }
+
+    const cookieStore = await cookies();
+    cookieStore.set('pending_delete', JSON.stringify(pendingDelete), { maxAge: 600, path: '/' });
+
+    return `[PENDING_DELETE]
+Jeg fant denne avtalen:
+${formatDeleteDetails(pendingDelete)}
+
+Vil du at jeg skal slette denne avtalen?`;
   }
 
   if (params.action === 'update_calendar_event') {
@@ -456,6 +566,41 @@ Tid: ${update.newStartTime}\u2013${update.newEndTime}`;
     return "[UPDATE_CANCELLED]\nOk, jeg endrer ikke avtalen.";
   }
 
+  if (params.action === 'confirm_delete') {
+    const cookieStore = await cookies();
+    const cookie = cookieStore.get('pending_delete');
+    if (!cookie) {
+      return "[DELETE_NO_MATCH]";
+    }
+
+    const event = JSON.parse(cookie.value) as PendingDelete;
+
+    try {
+      await deleteCalendarEvent(accessToken, event.eventId);
+    } catch (error) {
+      if (error instanceof Error && error.message === 'GOOGLE_EVENT_NOT_DELETABLE') {
+        return "[DELETE_NOT_ALLOWED]";
+      }
+      throw error;
+    }
+
+    try {
+      cookieStore.delete('pending_delete');
+    } catch (cleanupError) {
+      console.error("Deleted calendar event, but failed to clear pending_delete cookie:", cleanupError);
+    }
+
+    return `[DELETE_SUCCESS]
+Avtalen er slettet fra Google Kalender:
+${formatDeleteDetails(event)}`;
+  }
+
+  if (params.action === 'cancel_delete') {
+    const cookieStore = await cookies();
+    cookieStore.delete('pending_delete');
+    return "[DELETE_CANCELLED]\nOk, jeg sletter ikke avtalen.";
+  }
+
   // Determine standard fetch boundary
   let fetchLimit = (params.range === 'upcoming' || params.keyword) ? 50 : 20;
   let timeMin: string | undefined;
@@ -610,6 +755,11 @@ export async function processChatInteraction(messages: {role: 'user' | 'assistan
     const deterministicUpdateReply = getDeterministicUpdateReply(toolContext);
     if (deterministicUpdateReply) {
       return deterministicUpdateReply;
+    }
+
+    const deterministicDeleteReply = getDeterministicDeleteReply(toolContext);
+    if (deterministicDeleteReply) {
+      return deterministicDeleteReply;
     }
 
     // 4. Provide the result context to the final generation model
