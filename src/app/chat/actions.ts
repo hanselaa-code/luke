@@ -17,6 +17,22 @@ function getUnsupportedQuestionReply(lang: 'no' | 'en'): string {
     : "I'm not fully sure about that yet, but I can help with your calendar. You can ask things like: what do I have tomorrow, when am I free next week, or when is my next flight.";
 }
 
+function getOsloDayBounds(date: string) {
+  const [year, month, day] = date.split('-').map(Number);
+  const noonUtc = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  const offsetStr = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Oslo',
+    timeZoneName: 'longOffset',
+  }).format(noonUtc);
+  const match = offsetStr.match(/GMT([+-]\d{2}:\d{2})/);
+  const offset = match?.[1] || '+01:00';
+
+  return {
+    timeMin: `${date}T00:00:00${offset}`,
+    timeMax: `${date}T23:59:59${offset}`,
+  };
+}
+
 /**
  * Single server-side tool abstraction handling all calendar query combinations.
  */
@@ -47,9 +63,6 @@ async function getCalendarContext(accessToken: string, params: CalendarToolReque
     console.log(`[DEBUG] Explicit bounds for ${params.range}: calculated start ${timeMin}, calculated end ${timeMax}`);
   }
 
-  let events = await getUpcomingEvents(accessToken, fetchLimit, timeMin, timeMax);
-  console.log(`[DEBUG] Fetched ${events.length} explicit events from Google API.`);
-
   // Past Date Verification & Resolution
   if (params.date) {
     const targetDate = params.date;
@@ -60,9 +73,20 @@ async function getCalendarContext(accessToken: string, params: CalendarToolReque
       console.log(`[DEBUG] BLOCKED: Requested date ${targetDate} is in the past relative to Oslo current date (${osloFormat})`);
       return baseContext + `[SYSTEM FLAG]: The user's explicitly requested date (${targetDate}) is ALREADY IN THE PAST. DO NOT suggest free or booked time. Simply inform the user naturally that this date has passed.`;
     }
-    
+
+    const bounds = getOsloDayBounds(targetDate);
+    timeMin = bounds.timeMin;
+    timeMax = bounds.timeMax;
+    fetchLimit = 200;
+    console.log(`[DEBUG] Exact date bounds for ${targetDate}: calculated start ${timeMin}, calculated end ${timeMax}`);
+  }
+
+  let events = await getUpcomingEvents(accessToken, fetchLimit, timeMin, timeMax);
+  console.log(`[DEBUG] Fetched ${events.length} explicit events from Google API.`);
+
+  if (params.date) {
     // Filter purely by exact date match in Iso format
-    events = events.filter(e => e.startIso?.startsWith(targetDate) || e.endIso?.startsWith(targetDate));
+    events = events.filter(e => e.startIso?.startsWith(params.date!) || e.endIso?.startsWith(params.date!));
   }
 
   // Apply Range & Weekday Filters

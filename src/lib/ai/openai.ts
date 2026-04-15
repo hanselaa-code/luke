@@ -62,6 +62,8 @@ Keys:
 Examples:
 User: "What time is it?" -> {"requiresCalendar": false}
 User: "Am I free tomorrow afternoon?" -> {"requiresCalendar": true, "range": "tomorrow", "partOfDay": "afternoon"}
+User: "Do I have any free time Wednesday April 22?" -> {"requiresCalendar": true, "date": "Resolved YYYY-MM-DD for Wednesday April 22", "needsSuggestion": true, "durationMinutes": 30}
+User: "Har jeg noe ledig tid onsdag 22 april?" -> {"requiresCalendar": true, "date": "Resolved YYYY-MM-DD for onsdag 22 april", "needsSuggestion": true, "durationMinutes": 30}
 User: "Summarize only important things this week" -> {"requiresCalendar": true, "range": "this_week", "summaryStyle": "important_only"}
 History: [User: "Am I free this week?", Assistant: "You are busy on Monday."], User: "What about Tuesday?" -> {"requiresCalendar": true, "date": "Resolved YYYY-MM-DD of Tuesday this week."}
 `;
