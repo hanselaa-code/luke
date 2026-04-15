@@ -23,6 +23,58 @@ export interface FormattedEmail {
   snippet: string;
 }
 
+export interface FormattedEmailDetail extends FormattedEmail {
+  body: string;
+}
+
+/**
+ * Helper to decode base64url data from Gmail API.
+ */
+function decodeBase64(data: string): string {
+  if (!data) return '';
+  // Gmail uses base64url, so replace - with + and _ with /
+  const base64 = data.replace(/-/g, '+').replace(/_/g, '/');
+  return Buffer.from(base64, 'base64').toString('utf8');
+}
+
+/**
+ * Recursive helper to extract the message body from Gmail multi-part payload.
+ * Priority: text/plain > text/html
+ */
+function extractBodyFromPayload(payload: any): { plain: string; html: string } {
+  let plain = '';
+  let html = '';
+
+  if (payload.mimeType === 'text/plain' && payload.body?.data) {
+    plain = decodeBase64(payload.body.data);
+  } else if (payload.mimeType === 'text/html' && payload.body?.data) {
+    html = decodeBase64(payload.body.data);
+  }
+
+  if (payload.parts) {
+    for (const part of payload.parts) {
+      const result = extractBodyFromPayload(part);
+      if (result.plain) plain += (plain ? '\n' : '') + result.plain;
+      if (result.html) html += (html ? '\n' : '') + result.html;
+    }
+  }
+
+  return { plain, html };
+}
+
+/**
+ * Strip HTML tags for clean LLM context if only HTML is available.
+ */
+function stripHtml(html: string): string {
+  if (!html) return '';
+  return html
+    .replace(/<style[^>]*>.*<\/style>/gms, '')
+    .replace(/<script[^>]*>.*<\/script>/gms, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /**
  * Fetch a list of messages based on a query (q) and format them concisely.
  */
@@ -72,12 +124,10 @@ export async function getEmailSummaries(accessToken: string, query: string = '',
       throw new Error('GOOGLE_AUTH_EXPIRED');
     }
     
-    // Check for insufficient permissions (scope not granted)
     if (errorMsg.includes('403') || errorMsg.includes('insufficient permissions')) {
       throw new Error('GMAIL_PERMISSION_DENIED');
     }
 
-    // Check for API disabled
     if (errorMsg.includes('gmail api has not been used') || errorMsg.includes('disabled')) {
       throw new Error('GMAIL_API_DISABLED');
     }
@@ -91,4 +141,42 @@ export async function getEmailSummaries(accessToken: string, query: string = '',
  */
 export async function getUnreadEmails(accessToken: string, maxResults: number = 5): Promise<FormattedEmail[]> {
   return getEmailSummaries(accessToken, 'is:unread', maxResults);
+}
+
+/**
+ * Fetch the full content of a specific message and extract a usable body.
+ */
+export async function getFullEmailContent(accessToken: string, messageId: string): Promise<FormattedEmailDetail> {
+  const gmail = getGmailClient(accessToken);
+
+  try {
+    const response = await gmail.users.messages.get({
+      userId: 'me',
+      id: messageId,
+      format: 'full',
+    });
+
+    const data = response.data;
+    const headers = data.payload?.headers || [];
+    const subject = headers.find(h => h.name === 'Subject')?.value || '(No Subject)';
+    const from = headers.find(h => h.name === 'From')?.value || '(Unknown Sender)';
+    const date = headers.find(h => h.name === 'Date')?.value || '';
+    
+    const bodies = extractBodyFromPayload(data.payload);
+    // Prefer text/plain, fallback to stripped text/html
+    let body = bodies.plain || stripHtml(bodies.html) || data.snippet || '(No content)';
+
+    return {
+      id: messageId,
+      threadId: data.threadId!,
+      subject,
+      from,
+      date,
+      snippet: data.snippet || '',
+      body,
+    };
+  } catch (error: any) {
+    console.error(`[GMAIL] Failed to fetch message ${messageId}:`, error.message || error);
+    throw error; // Let caller handle auth/api errors
+  }
 }

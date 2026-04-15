@@ -3,7 +3,7 @@
 import { auth } from '@/auth';
 import { cookies } from 'next/headers';
 import { getTomorrowsEvents, getUpcomingEvents, getOsloBounds, getFreeSlots, createCalendarEvent, updateCalendarEvent, deleteCalendarEvent, FormattedEvent } from '@/lib/google/calendar';
-import { getEmailSummaries, getUnreadEmails } from '@/lib/google/gmail';
+import { getEmailSummaries, getUnreadEmails, getFullEmailContent } from '@/lib/google/gmail';
 import { LukeToolRequest, generateToolRequest, generateFinalResponse, detectResponseLanguage } from '@/lib/ai/openai';
 
 function getStartHour(timeStr: string): number {
@@ -480,22 +480,62 @@ async function getCalendarContext(accessToken: string, params: LukeToolRequest):
 }
 
 async function getGmailContext(accessToken: string, params: LukeToolRequest): Promise<string> {
-  const { gmailAction, emailFilter, unreadOnly, limit = 5 } = params;
-  
+  const { gmailAction, emailFilter, unreadOnly, limit = 5, emailId, emailIndex } = params;
+  const cookieStore = await cookies();
+
   try {
+    // 1. HANDLE FULL CONTENT READ
+    if (gmailAction === 'read') {
+      let targetId = emailId || cookieStore.get('last_discussed_email_id')?.value;
+
+      // If we have an index (e.g. "den øverste"), resolve it by fetching the list first
+      if (emailIndex) {
+        const list = await getEmailSummaries(accessToken, emailFilter || '', Math.max(emailIndex, 5));
+        if (list[emailIndex - 1]) {
+          targetId = list[emailIndex - 1].id;
+        }
+      }
+
+      if (targetId) {
+        const detail = await getFullEmailContent(accessToken, targetId);
+        cookieStore.set('last_discussed_email_id', targetId, { maxAge: 600, path: '/' });
+        return `Fetched Gmail Detail:\nFra: ${detail.from}\nEmne: ${detail.subject}\nDato: ${detail.date}\nInnhold:\n${detail.body}`;
+      }
+
+      // If we still don't have a target, but had a filter, try searching first
+      if (emailFilter && !emailId) {
+         const list = await getEmailSummaries(accessToken, emailFilter, 1);
+         if (list.length > 0) {
+            const detail = await getFullEmailContent(accessToken, list[0].id);
+            cookieStore.set('last_discussed_email_id', list[0].id, { maxAge: 600, path: '/' });
+            return `Fetched Gmail Detail:\nFra: ${detail.from}\nEmne: ${detail.subject}\nDato: ${detail.date}\nInnhold:\n${detail.body}`;
+         }
+      }
+
+      return "Klarte ikke å finne en spesifikk e-post å lese. Kan du spesifisere hvilken du mener?";
+    }
+
+    // 2. HANDLE LIST / SUMMARIZE
     let emails = [];
     if (unreadOnly || gmailAction === 'summarize') {
       emails = await getUnreadEmails(accessToken, limit);
     } else {
-      // General list or search
       emails = await getEmailSummaries(accessToken, emailFilter || '', limit);
     }
 
     if (emails.length === 0) {
+      cookieStore.delete('last_discussed_email_id');
       return "Found 0 matching emails.";
     }
 
-    const list = emails.map(e => `- Fra: ${e.from}\n  Emne: ${e.subject}\n  Dato: ${e.date}\n  Sammendrag: ${e.snippet}`).join('\n\n');
+    // If we only found one email in a general search, anchor to it
+    if (emails.length === 1) {
+      cookieStore.set('last_discussed_email_id', emails[0].id, { maxAge: 600, path: '/' });
+    } else {
+      cookieStore.delete('last_discussed_email_id');
+    }
+
+    const list = emails.map((e, index) => `${index + 1}. Fra: ${e.from}\n   Emne: ${e.subject}\n   Dato: ${e.date}\n   Sammendrag: ${e.snippet}`).join('\n\n');
     return `Fetched Gmail Data:\n${list}`;
   } catch (error: any) {
     if (error.message === 'GMAIL_PERMISSION_DENIED') {
