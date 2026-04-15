@@ -10,7 +10,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       authorization: {
         params: {
           // SCOPE CHANGE: Expanded to full calendar access for event creation
-          scope: "openid profile email https://www.googleapis.com/auth/calendar",
+          scope: "openid profile email https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/gmail.readonly",
           prompt: "consent",
           access_type: "offline",
           response_type: "code"

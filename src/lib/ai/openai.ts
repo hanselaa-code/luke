@@ -8,9 +8,11 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-export interface CalendarToolRequest {
+export interface LukeToolRequest {
   requiresCalendar: boolean;
+  requiresGmail?: boolean;
   action?: 'query' | 'summarize' | 'suggest' | 'create_calendar_event' | 'confirm_create' | 'cancel_create' | 'update_calendar_event' | 'confirm_update' | 'cancel_update' | 'delete_calendar_event' | 'confirm_delete' | 'cancel_delete';
+  gmailAction?: 'list' | 'summarize' | 'search';
   range?: 'today' | 'tomorrow' | 'this_week' | 'next_week' | 'this_month' | 'upcoming';
   weekday?: string;
   date?: string;
@@ -18,6 +20,8 @@ export interface CalendarToolRequest {
   beforeTime?: string;
   afterTime?: string;
   keyword?: string;
+  emailFilter?: string; // e.g. "fra Kari" or "fra skolen"
+  unreadOnly?: boolean;
   first?: boolean;
   last?: boolean;
   summaryStyle?: 'full' | 'important_only';
@@ -36,52 +40,39 @@ export interface CalendarToolRequest {
 /**
  * Stage 1: Classify the user's query into a structured tool argument.
  */
-export async function generateToolRequest(messages: {role: 'user' | 'assistant', content: string}[]): Promise<CalendarToolRequest> {
-  const fallback: CalendarToolRequest = { requiresCalendar: false };
+export async function generateToolRequest(messages: {role: 'user' | 'assistant', content: string}[]): Promise<LukeToolRequest> {
+  const fallback: LukeToolRequest = { requiresCalendar: false };
   
   const osloNow = new Date();
   const osloOptions: Intl.DateTimeFormatOptions = { timeZone: 'Europe/Oslo', year: 'numeric', month: 'numeric', day: 'numeric', weekday: 'long', hour: '2-digit', minute: '2-digit' };
   const strNow = new Intl.DateTimeFormat('en-GB', osloOptions).format(osloNow);
   const [datePart, timePart] = strNow.split(', ');
 
-  const systemPrompt = `You are an AI assistant orchestrator determining if a user's message requires checking their calendar.
+  const systemPrompt = `You are an AI assistant orchestrator determining if a user's message requires checking their calendar OR their email (Gmail).
 You MUST return a JSON object representing the tool call parameters.
 
 LOCAL TIME CONTEXT: The exact current time in Europe/Oslo is ${timePart}. Today is ${datePart}.
-CRITICAL RULE: If the user provides a follow-up reference like "den", "det", "denne", or "it", you MUST look at the conversational history to identify which specific event was last discussed. If the user asks to "move it", they usually refer to the event that the assistant just fetched or described.
-RESOLVE RELATIVE TIME: For requests like "flytt den en time frem" or "neste trening", calculate the target based on the grounded logic. "After [Event]" means fetching the event first or identifying its end time.
 
-Keys:
-1. "requiresCalendar" (boolean): true if querying or modifying Google Calendar is necessary.
-2. "action" (string, optional): "query", "summarize", "suggest", "create_calendar_event", "confirm_create", "cancel_create", "update_calendar_event", "confirm_update", "cancel_update", "delete_calendar_event", "confirm_delete", "cancel_delete"
-3. "range" (string, optional): "today" | "tomorrow" | "this_week" | "next_week" | "this_month" | "upcoming"
-4. "weekday" (string, optional): specific day like "friday", "monday"
-5. "partOfDay" (string, optional): "morning" | "afternoon" | "evening"
-6. "beforeTime" (string, optional): "HH:mm" boundary (e.g. "12:00")
-7. "afterTime" (string, optional): "HH:mm" boundary (e.g. "16:00")
-8. "keyword" (string, optional): word to filter by, e.g., "flight", "dentist"
-9. "first" / "last" (boolean, optional): if they ask for the first/last event.
-10. "summaryStyle" (string, optional): "full" or "important_only"
-11. "limit" (number, optional): max number of events to return.
-12. "needsSuggestion" (boolean, optional): true if user asks for free time, a meeting slot, or scheduling availability.
-13. "durationMinutes" (number, optional): numeric duration for the requested slot (e.g., 30, 60). Default to 60 for "create_calendar_event" if unstated.
-14. "date" (string, optional): exact "YYYY-MM-DD" target.
-15. "title" (string, optional): The title of the event for "create_calendar_event".
-16. "startTime" (string, optional): "HH:mm" for event creation.
-17. "endTime" (string, optional): "HH:mm" for event creation or requested new end time for event updates.
-18. "targetStartTime" / "targetEndTime" (string, optional): existing event time when the user says "from 10:15-12:37".
-19. "newTitle" (string, optional): new title only if the user clearly asks to rename the event.
-20. "newDate" (string, optional): new event date for update requests.
+Keys for CALENDAR (requiresCalendar: true):
+1. "action": "query", "summarize", "suggest", "create_calendar_event", etc.
+2. "range", "weekday", "date", "startTime", "endTime", "title", "newTitle", "newDate", etc.
 
-SPECIAL FLOWS:
-- CREATE: If the user wants to add, book, or schedule an event, use action "create_calendar_event".
-- CONFIRM / CANCEL: Use the appropriate action for confirm/cancel in create, update, or delete flows.
+Keys for GMAIL (requiresGmail: true):
+1. "gmailAction": "list" (general list), "summarize" (summarize unread or recent), "search" (specific search).
+2. "emailFilter": string keyword for search/filter (e.g. "Kari", "skolen", "viktig").
+3. "unreadOnly": boolean, true if the user specifically asks for unread/new messages.
+4. "limit": number of emails to fetch (default 5).
 
-UPDATE FLOWS:
-- If the user wants to move, change, rename, or update exactly one existing event, use action "update_calendar_event".
+CRITICAL RULE: 
+- If the user asks about emails, inbox, messages, or "fått noe", set "requiresGmail" to true.
+- If the user asks about meetings, schedule, "avtaler", or "hva skal jeg", set "requiresCalendar" to true.
+- Both can be true if requested.
 
-DELETE FLOWS:
-- If the user wants to delete, remove, or cancel exactly one existing event, use action "delete_calendar_event".
+EXAMPLES:
+User: "Har jeg fått noen viktige e-poster i dag?" -> {"requiresGmail": true, "gmailAction": "summarize", "emailFilter": "viktig", "unreadOnly": false, "limit": 5}
+User: "Oppsummer uleste e-poster" -> {"requiresGmail": true, "gmailAction": "summarize", "unreadOnly": true}
+User: "Vis e-poster fra Kari" -> {"requiresGmail": true, "gmailAction": "search", "emailFilter": "Kari"}
+User: "Har jeg fått noe fra skolen?" -> {"requiresGmail": true, "gmailAction": "search", "emailFilter": "skolen"}
 `;
 
   try {
@@ -97,7 +88,7 @@ DELETE FLOWS:
 
     const out = response.choices[0].message?.content || '{}';
     console.log("[DEBUG] Stage 1 Output:", out);
-    return JSON.parse(out) as CalendarToolRequest;
+    return JSON.parse(out) as LukeToolRequest;
   } catch (err) {
     console.error("[ERROR] Failed to map intent:", err);
     return fallback;
@@ -106,7 +97,7 @@ DELETE FLOWS:
 
 export function detectResponseLanguage(msg: string): 'no' | 'en' {
   const lower = msg.toLowerCase();
-  const norwegianWords = ['hva', 'når', 'hvem', 'hvordan', 'hvilken', 'hvilket', 'har', 'jeg', 'er', 'på', 'til', 'om', 'i', 'dag', 'morgen', 'kveld', 'uke', 'helg', 'hei', 'hallo', 'møte', 'neste', 'mitt', 'mine', 'noe', 'ingenting', 'fly', 'flyreise', 'kjedelig', 'rolig', 'avtale', 'jobb', 'fritid', 'flytt', 'slett', 'endre', 'legg', 'book', 'sett'];
+  const norwegianWords = ['hva', 'når', 'hvem', 'hvordan', 'hvilken', 'hvilket', 'har', 'jeg', 'er', 'på', 'til', 'om', 'i', 'dag', 'morgen', 'kveld', 'uke', 'helg', 'hei', 'hallo', 'møte', 'neste', 'mitt', 'mine', 'noe', 'ingenting', 'fly', 'flyreise', 'kjedelig', 'rolig', 'avtale', 'jobb', 'fritid', 'flytt', 'slett', 'endre', 'legg', 'book', 'sett', 'epost', 'e-post', 'innboks', 'melding'];
   const words = lower.replace(/[^a-zæøå]/g, ' ').split(/\s+/);
   let noScore = 0;
   for (const w of words) if (norwegianWords.includes(w)) noScore++;
@@ -130,16 +121,11 @@ You are concise, professional, but friendly.
 CRITICAL BEHAVIOR RULES:
 1. ${langRule}
 2. CURRENT DATE GROUNDING: Today is ${strNow}. Never reason about dates as if it is a different day.
-3. CONVERSATIONAL ANCHORING: If the context refers to one specific day, focus your answer on that day.
-4. NATURAL OVERVIEW: When describing a day or week, be concise and use professional Norwegian idioms. Example: "Det krasjer med..." or "Du har hele formiddagen ledig."
-5. CONFLICT HANDLING: If the tool context contains CONFLICT WARNINGS, you MUST explicitly mention these overlaps clearly.
-6. EVENT CREATION CONFIRMATION: If the context indicates a pending event, you MUST present a summary like this:
-   "Jeg kan opprette følgende avtale:
-   Møte: [Title]
-   Dato: [Weekday] [Day]. [Month]
-   Tid: [Start]–[End]
-   Vil du at jeg skal legge dette inn i kalenderen?"
-7. CLARIFICATION RULE: If scheduling details are missing, do NOT guess. Ask a short clarification question.
+3. CONVERSATIONAL ANCHORING: If the context refers to specific events or emails, focus strictly on those.
+4. NATURAL OVERVIEW: When describing emails, be concise. Use phrases like "Du har fått en e-post fra..." or "Her er et sammendrag av de siste meldingene:".
+5. CONFLICT HANDLING: For calendar, explicitly mention overlaps.
+6. EVENT CREATION CONFIRMATION: Use the specific summary format if a calendar event is pending.
+7. GMAIL SUMMARIES: When summarizing emails, use the provided sender, subject, and snippet to give a useful overview in Norwegian. Do not list technical IDs.
 
 TOOL CONTEXT:
 ${systemContext}`;

@@ -3,7 +3,8 @@
 import { auth } from '@/auth';
 import { cookies } from 'next/headers';
 import { getTomorrowsEvents, getUpcomingEvents, getOsloBounds, getFreeSlots, createCalendarEvent, updateCalendarEvent, deleteCalendarEvent, FormattedEvent } from '@/lib/google/calendar';
-import { CalendarToolRequest, generateToolRequest, generateFinalResponse, detectResponseLanguage } from '@/lib/ai/openai';
+import { getEmailSummaries, getUnreadEmails } from '@/lib/google/gmail';
+import { LukeToolRequest, generateToolRequest, generateFinalResponse, detectResponseLanguage } from '@/lib/ai/openai';
 
 function getStartHour(timeStr: string): number {
   if (timeStr === 'All Day') return 0;
@@ -197,7 +198,7 @@ function titleMatches(eventTitle: string, query?: string): boolean {
   return words.every((word) => normalizedTitle.includes(word));
 }
 
-function findUpdateMatches(events: FormattedEvent[], params: CalendarToolRequest, lastEventId?: string): FormattedEvent[] {
+function findUpdateMatches(events: FormattedEvent[], params: LukeToolRequest, lastEventId?: string): FormattedEvent[] {
   if (lastEventId) {
     const directMatch = events.find(e => e.id === lastEventId);
     if (directMatch && titleMatches(directMatch.title, params.title)) {
@@ -224,7 +225,7 @@ function findUpdateMatches(events: FormattedEvent[], params: CalendarToolRequest
   });
 }
 
-function hasDeleteLookupDetail(params: CalendarToolRequest): boolean {
+function hasDeleteLookupDetail(params: LukeToolRequest): boolean {
   return !!(params.title || params.date || params.startTime || params.endTime || params.targetStartTime || params.targetEndTime);
 }
 
@@ -247,7 +248,7 @@ function formatDeleteDetails(event: PendingDelete): string {
   return `Møte: ${event.title}\nDato: ${formatOsloDateLabel(event.date, 'no')}\nTid: ${event.startTime}–${event.endTime}`;
 }
 
-function buildPendingUpdate(event: FormattedEvent, params: CalendarToolRequest): PendingUpdate | null {
+function buildPendingUpdate(event: FormattedEvent, params: LukeToolRequest): PendingUpdate | null {
   const date = getOsloDateFromIso(event.startIso);
   const startTime = getOsloTimeFromIso(event.startIso);
   const endTime = getOsloTimeFromIso(event.endIso);
@@ -316,7 +317,7 @@ function detectCollisions(events: FormattedEvent[]): string[] {
   return collisions;
 }
 
-async function getCalendarContext(accessToken: string, params: CalendarToolRequest): Promise<string> {
+async function getCalendarContext(accessToken: string, params: LukeToolRequest): Promise<string> {
   const currentWeekDay = new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Oslo', weekday: 'long', month: 'long', day: 'numeric' }).format(new Date());
   const timeStr = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Oslo', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
   let baseContext = `System Context: The current time is ${timeStr}. Today is ${currentWeekDay}. `;
@@ -478,6 +479,35 @@ async function getCalendarContext(accessToken: string, params: CalendarToolReque
   return final;
 }
 
+async function getGmailContext(accessToken: string, params: LukeToolRequest): Promise<string> {
+  const { gmailAction, emailFilter, unreadOnly, limit = 5 } = params;
+  
+  try {
+    let emails = [];
+    if (unreadOnly || gmailAction === 'summarize') {
+      emails = await getUnreadEmails(accessToken, limit);
+    } else {
+      // General list or search
+      emails = await getEmailSummaries(accessToken, emailFilter || '', limit);
+    }
+
+    if (emails.length === 0) {
+      return "Found 0 matching emails.";
+    }
+
+    const list = emails.map(e => `- Fra: ${e.from}\n  Emne: ${e.subject}\n  Dato: ${e.date}\n  Sammendrag: ${e.snippet}`).join('\n\n');
+    return `Fetched Gmail Data:\n${list}`;
+  } catch (error: any) {
+    if (error.message === 'GMAIL_PERMISSION_DENIED') {
+      return "[GMAIL_PERMISSION_DENIED]: Luke trenger tilgang til e-posten din. Logg inn på nytt for å gi tilgang.";
+    }
+    if (error.message === 'GMAIL_API_DISABLED') {
+      return "[GMAIL_API_DISABLED]: Gmail API er ikke aktivert i Google Cloud for dette prosjektet.";
+    }
+    throw error;
+  }
+}
+
 export async function processChatInteraction(messages: {role: 'user' | 'assistant', content: string}[]) {
   try {
     const session = await auth();
@@ -490,14 +520,36 @@ export async function processChatInteraction(messages: {role: 'user' | 'assistan
     }
 
     const toolReq = await generateToolRequest(messages);
-    if (!toolReq.requiresCalendar) return getUnsupportedQuestionReply(lang);
+    
+    let combinedContext = "";
 
-    const ctx = await getCalendarContext(session.accessToken, toolReq);
-    const dCreate = getDeterministicCreateReply(ctx, lang); if (dCreate) return dCreate;
-    const dUpdate = getDeterministicUpdateReply(ctx); if (dUpdate) return dUpdate;
-    const dDelete = getDeterministicDeleteReply(ctx); if (dDelete) return dDelete;
+    if (toolReq.requiresCalendar) {
+      combinedContext += await getCalendarContext(session.accessToken, toolReq);
+    }
 
-    return await generateFinalResponse(messages, ctx, lang);
+    if (toolReq.requiresGmail) {
+      const gmailContext = await getGmailContext(session.accessToken, toolReq);
+      combinedContext += (combinedContext ? "\n\n" : "") + gmailContext;
+    }
+
+    // Fallback if neither was triggered but should have been
+    if (!toolReq.requiresCalendar && !toolReq.requiresGmail) {
+       return getUnsupportedQuestionReply(lang);
+    }
+
+    // Specific deterministic replies for calendar flows (confirmation, etc.)
+    const dCreate = getDeterministicCreateReply(combinedContext, lang); if (dCreate) return dCreate;
+    const dUpdate = getDeterministicUpdateReply(combinedContext); if (dUpdate) return dUpdate;
+    const dDelete = getDeterministicDeleteReply(combinedContext); if (dDelete) return dDelete;
+
+    // Custom fallback for Gmail permission errors
+    if (combinedContext.includes("[GMAIL_PERMISSION_DENIED]")) {
+      return lang === 'no' 
+        ? "Jeg trenger tilgang til e-posten din for å svare på dette. Vennligst logg ut og logg inn igjen for å gi Luke tillatelse til å se e-poster."
+        : "I need access to your email to answer this. Please sign out and sign in again to grant Luke permission to see emails.";
+    }
+
+    return await generateFinalResponse(messages, combinedContext, lang);
   } catch (err) {
     console.error("CHAT ERROR:", err);
     return "Beklager, det oppsto en teknisk feil.";
