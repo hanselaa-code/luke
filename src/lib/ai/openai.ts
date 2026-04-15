@@ -10,7 +10,7 @@ const openai = new OpenAI({
 
 export interface CalendarToolRequest {
   requiresCalendar: boolean;
-  action?: string;
+  action?: 'query' | 'summarize' | 'suggest' | 'create_calendar_event' | 'confirm_create' | 'cancel_create';
   range?: 'today' | 'tomorrow' | 'this_week' | 'next_week' | 'this_month' | 'upcoming';
   weekday?: string;
   date?: string;
@@ -24,6 +24,9 @@ export interface CalendarToolRequest {
   limit?: number;
   needsSuggestion?: boolean;
   durationMinutes?: number;
+  title?: string;
+  startTime?: string;
+  endTime?: string;
 }
 
 /**
@@ -44,8 +47,8 @@ LOCAL TIME CONTEXT: The exact current time in Europe/Oslo is ${timePart}. Today 
 CRITICAL RULE: If the user provides a follow-up reference (e.g., "Hva med tirsdag?"), you MUST look at the conversational history to resolve exactly WHICH Tuesday they mean based on the timeline, and explicitly use the target "date" string in "YYYY-MM-DD" format. Do not guess aimlessly.
 
 Keys:
-1. "requiresCalendar" (boolean): true if querying Google Calendar is necessary to answer the question.
-2. "action" (string, optional): e.g., "query", "summarize", "suggest"
+1. "requiresCalendar" (boolean): true if querying or modifying Google Calendar is necessary.
+2. "action" (string, optional): "query", "summarize", "suggest", "create_calendar_event", "confirm_create", "cancel_create"
 3. "range" (string, optional): "today" | "tomorrow" | "this_week" | "next_week" | "this_month" | "upcoming"
 4. "weekday" (string, optional): specific day like "friday", "monday"
 5. "partOfDay" (string, optional): "morning" | "afternoon" | "evening"
@@ -56,16 +59,24 @@ Keys:
 10. "summaryStyle" (string, optional): "full" or "important_only"
 11. "limit" (number, optional): max number of events to return.
 12. "needsSuggestion" (boolean, optional): true if user asks for free time, a meeting slot, or scheduling availability.
-13. "durationMinutes" (number, optional): numeric duration for the requested slot (e.g., 30, 60). Default to 30 if unstated but suggestion is requested.
-14. "date" (string, optional): exact "YYYY-MM-DD" target if resolving a specific date context from history. DO NOT use if they ask for "last" or multiple things.
+13. "durationMinutes" (number, optional): numeric duration for the requested slot (e.g., 30, 60). Default to 60 for "create_calendar_event" if unstated.
+14. "date" (string, optional): exact "YYYY-MM-DD" target.
+15. "title" (string, optional): The title of the event for "create_calendar_event".
+16. "startTime" (string, optional): "HH:mm" for event creation.
+17. "endTime" (string, optional): "HH:mm" for event creation.
+
+SPECIAL FLOWS:
+- CREATE: If the user wants to add, book, or schedule an event (e.g., "legg inn møte", "book time"), use action "create_calendar_event". Extract title, date, and startTime if possible.
+- CONFIRM: If the user says "ja", "ok", "gjør det", "confirm" in response to an assistant proposing to create an event, use action "confirm_create".
+- CANCEL: If the user says "nei", "stopp", "avbryt", "cancel" in response to a proposed event, use action "cancel_create".
 
 Examples:
 User: "What time is it?" -> {"requiresCalendar": false}
 User: "Am I free tomorrow afternoon?" -> {"requiresCalendar": true, "range": "tomorrow", "partOfDay": "afternoon"}
-User: "Do I have any free time Wednesday April 22?" -> {"requiresCalendar": true, "date": "Resolved YYYY-MM-DD for Wednesday April 22", "needsSuggestion": true, "durationMinutes": 30}
-User: "Har jeg noe ledig tid onsdag 22 april?" -> {"requiresCalendar": true, "date": "Resolved YYYY-MM-DD for onsdag 22 april", "needsSuggestion": true, "durationMinutes": 30}
-User: "Summarize only important things this week" -> {"requiresCalendar": true, "range": "this_week", "summaryStyle": "important_only"}
-History: [User: "Am I free this week?", Assistant: "You are busy on Monday."], User: "What about Tuesday?" -> {"requiresCalendar": true, "date": "Resolved YYYY-MM-DD of Tuesday this week."}
+User: "Legg inn møte med Per fredag kl 14" -> {"requiresCalendar": true, "action": "create_calendar_event", "title": "Møte med Per", "date": "YYYY-MM-DD for Friday", "startTime": "14:00", "durationMinutes": 60}
+History: [Assistant: "Jeg kan opprette følgende avtale: Møte med Per...", User: "ja"] -> {"requiresCalendar": true, "action": "confirm_create"}
+History: [Assistant: "Jeg kan opprette følgende avtale: ...", User: "nei"] -> {"requiresCalendar": true, "action": "cancel_create"}
+User: "Sett opp avtale i morgen" -> {"requiresCalendar": true, "action": "create_calendar_event", "date": "YYYY-MM-DD for tomorrow"} (Note: startTime is missing, this is fine, Stage 2 will handle it).
 `;
 
   try {
@@ -120,6 +131,13 @@ CRITICAL BEHAVIOR RULES:
 3. CONVERSATIONAL ANCHORING: If the context fetched from the tool refers to one specific day, ONLY answer about that specific day. Do not ramble into other days unless the user asked a multi-day question like "this week".
 4. MULTI-DAY SUMMARIES: If the user asked about a whole week, provide a useful summary of the week's availability or business. Do not answer by only mentioning Monday.
 5. PAST DATE REJECTION: If the system context flags that a requested date is in the past, or if you notice you are suggesting a slot that occurred prior to ${strNow}, immediately apologize and inform the user that the date has passed naturally. DO NOT suggest passed dates.
+6. EVENT CREATION CONFIRMATION: If the system context indicates a pending event (PENDING_CREATE), you MUST present a summary using this EXACT format (in the requested language):
+   "Jeg kan opprette følgende avtale:
+   Møte: [Title]
+   Dato: [Weekday] [Day]. [Month]
+   Tid: [Start]–[End]
+   Vil du at jeg skal legge dette inn i kalenderen?"
+7. CLARIFICATION RULE: If scheduling details (date or time) are missing for a creation request, do NOT guess. Ask a short clarification question (e.g., "Hvilket tidspunkt...?", "Hvilken dag...?").
 
 TOOL OR SYSTEM CONTEXT:
 ${systemContext}`;

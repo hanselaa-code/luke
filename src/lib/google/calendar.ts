@@ -302,3 +302,41 @@ export async function getTomorrowsEvents(accessToken: string): Promise<Formatted
     throw new Error('Failed to fetch tomorrow\'s events from Google.');
   }
 }
+
+/**
+ * Creates a new event in the primary Google Calendar.
+ */
+export async function createCalendarEvent(
+  accessToken: string,
+  event: { summary: string; startIso: string; endIso: string }
+) {
+  const calendar = getCalendarClient(accessToken);
+
+  try {
+    const response = await calendar.events.insert({
+      calendarId: 'primary',
+      requestBody: {
+        summary: event.summary,
+        start: {
+          dateTime: event.startIso,
+          timeZone: 'Europe/Oslo',
+        },
+        end: {
+          dateTime: event.endIso,
+          timeZone: 'Europe/Oslo',
+        },
+      },
+    });
+
+    return response.data;
+  } catch (error: any) {
+    const errorMsg = error.message?.toLowerCase() || String(error).toLowerCase();
+    console.error('Error creating calendar event:', error);
+
+    if (errorMsg.includes('401') || errorMsg.includes('credential') || errorMsg.includes('unauthorized') || errorMsg.includes('auth')) {
+      throw new Error('GOOGLE_AUTH_EXPIRED');
+    }
+
+    throw new Error(`Google API Error: ${error.message || 'Failed to create calendar event'}`);
+  }
+}

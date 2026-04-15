@@ -1,7 +1,8 @@
 'use server';
 
 import { auth } from '@/auth';
-import { getTomorrowsEvents, getUpcomingEvents, getOsloBounds, getFreeSlots } from '@/lib/google/calendar';
+import { cookies } from 'next/headers';
+import { getTomorrowsEvents, getUpcomingEvents, getOsloBounds, getFreeSlots, createCalendarEvent } from '@/lib/google/calendar';
 import { CalendarToolRequest, generateToolRequest, generateFinalResponse, detectResponseLanguage } from '@/lib/ai/openai';
 
 function getStartHour(timeStr: string): number {
@@ -48,6 +49,71 @@ async function getCalendarContext(accessToken: string, params: CalendarToolReque
 
   if (!params.requiresCalendar) {
     return baseContext + "The user's question is outside the supported calendar scope. Reply with the concise fallback guidance in the user's language.";
+  }
+
+  if (params.action === 'create_calendar_event') {
+    const { title, date, startTime, durationMinutes = 60 } = params;
+    
+    // Safety Clarification Check: If date or time is missing, do NOT pick defaults.
+    if (!date && !startTime) {
+      return baseContext + "[SYSTEM INSTRUCTION]: Both date AND time are missing for the creation request. Ask the user for both.";
+    }
+    if (!date) {
+      return baseContext + `[SYSTEM INSTRUCTION]: The date is missing for the creation request (time was ${startTime}). Ask the user which day they want to schedule it.`;
+    }
+    if (!startTime) {
+      return baseContext + `[SYSTEM INSTRUCTION]: The time is missing for the creation request (date was ${date}). Ask the user what time they want to schedule it.`;
+    }
+
+    // Calculate End Time
+    const [h, m] = startTime.split(':').map(Number);
+    const startObj = new Date(0); startObj.setHours(h, m, 0);
+    const endObj = new Date(startObj.getTime() + durationMinutes * 60000);
+    const endTime = `${String(endObj.getHours()).padStart(2, '0')}:${String(endObj.getMinutes()).padStart(2, '0')}`;
+
+    // Store in Session Memory (Cookie)
+    const pendingEvent = { title: title || 'Møte', date, startTime, endTime };
+    const cookieStore = await cookies();
+    cookieStore.set('pending_event', JSON.stringify(pendingEvent), { maxAge: 600, path: '/' });
+
+    // Format for NL presentation
+    return baseContext + `[PENDING_CREATE]: The user wants to create an event. 
+Title: ${pendingEvent.title}
+Date: ${pendingEvent.date}
+Start: ${pendingEvent.startTime}
+End: ${pendingEvent.endTime}
+The tool has stored this. Present the confirmation summary to the user exactly as instructed.`;
+  }
+
+  if (params.action === 'confirm_create') {
+    const cookieStore = await cookies();
+    const cookie = cookieStore.get('pending_event');
+    if (!cookie) {
+      return baseContext + "I'm sorry, I couldn't find the meeting details to confirm. Could you please specify the meeting again?";
+    }
+
+    const event = JSON.parse(cookie.value);
+    const bounds = getOsloDayBounds(event.date);
+    
+    // Build ISO strings using the offset derived from getOsloDayBounds
+    const offset = bounds.timeMin.slice(-6); // e.g. +02:00
+    const startIso = `${event.date}T${event.startTime}:00${offset}`;
+    const endIso = `${event.date}T${event.endTime}:00${offset}`;
+
+    await createCalendarEvent(accessToken, {
+      summary: event.title,
+      startIso,
+      endIso
+    });
+
+    cookieStore.delete('pending_event');
+    return baseContext + "[SUCCESS]: The event has been successfully created in the Google Calendar.";
+  }
+
+  if (params.action === 'cancel_create') {
+    const cookieStore = await cookies();
+    cookieStore.delete('pending_event');
+    return baseContext + "[CANCELLED]: The user chose NOT to create the event. Confirm that you won't create it.";
   }
 
   // Determine standard fetch boundary
