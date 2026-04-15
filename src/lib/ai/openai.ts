@@ -63,7 +63,7 @@ Keys:
 14. "date" (string, optional): exact "YYYY-MM-DD" target.
 15. "title" (string, optional): The title of the event for "create_calendar_event".
 16. "startTime" (string, optional): "HH:mm" for event creation.
-17. "endTime" (string, optional): "HH:mm" for event creation.
+17. "endTime" (string, optional): "HH:mm" for event creation. If the user provides an explicit end time, include it and do not replace it with durationMinutes.
 
 SPECIAL FLOWS:
 - CREATE: If the user wants to add, book, or schedule an event (e.g., "legg inn møte", "book time"), use action "create_calendar_event". Extract title, date, and startTime if possible.
@@ -73,6 +73,7 @@ SPECIAL FLOWS:
 Examples:
 User: "What time is it?" -> {"requiresCalendar": false}
 User: "Am I free tomorrow afternoon?" -> {"requiresCalendar": true, "range": "tomorrow", "partOfDay": "afternoon"}
+User: "Train from 11:09 to 13:47 Friday" -> {"requiresCalendar": true, "action": "create_calendar_event", "title": "Train", "date": "YYYY-MM-DD for Friday", "startTime": "11:09", "endTime": "13:47"}
 User: "Legg inn møte med Per fredag kl 14" -> {"requiresCalendar": true, "action": "create_calendar_event", "title": "Møte med Per", "date": "YYYY-MM-DD for Friday", "startTime": "14:00", "durationMinutes": 60}
 History: [Assistant: "Jeg kan opprette følgende avtale: Møte med Per...", User: "ja"] -> {"requiresCalendar": true, "action": "confirm_create"}
 History: [Assistant: "Jeg kan opprette følgende avtale: ...", User: "nei"] -> {"requiresCalendar": true, "action": "cancel_create"}

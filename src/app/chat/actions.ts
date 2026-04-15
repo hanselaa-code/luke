@@ -34,6 +34,19 @@ function getOsloDayBounds(date: string) {
   };
 }
 
+function getOsloTodayDate(): string {
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Europe/Oslo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
+function isPastOsloDate(date: string): boolean {
+  return date < getOsloTodayDate();
+}
+
 /**
  * Single server-side tool abstraction handling all calendar query combinations.
  */
@@ -52,7 +65,7 @@ async function getCalendarContext(accessToken: string, params: CalendarToolReque
   }
 
   if (params.action === 'create_calendar_event') {
-    const { title, date, startTime, durationMinutes = 60 } = params;
+    const { title, date, startTime, endTime: providedEndTime, durationMinutes = 60 } = params;
     
     // Safety Clarification Check: If date or time is missing, do NOT pick defaults.
     if (!date && !startTime) {
@@ -64,12 +77,17 @@ async function getCalendarContext(accessToken: string, params: CalendarToolReque
     if (!startTime) {
       return baseContext + `[SYSTEM INSTRUCTION]: The time is missing for the creation request (date was ${date}). Ask the user what time they want to schedule it.`;
     }
+    if (isPastOsloDate(date)) {
+      return baseContext + `[SYSTEM FLAG]: The user's explicitly requested date (${date}) is ALREADY IN THE PAST. DO NOT create the event. Simply inform the user naturally that this date has passed.`;
+    }
 
-    // Calculate End Time
-    const [h, m] = startTime.split(':').map(Number);
-    const startObj = new Date(0); startObj.setHours(h, m, 0);
-    const endObj = new Date(startObj.getTime() + durationMinutes * 60000);
-    const endTime = `${String(endObj.getHours()).padStart(2, '0')}:${String(endObj.getMinutes()).padStart(2, '0')}`;
+    let endTime = providedEndTime;
+    if (!endTime) {
+      const [h, m] = startTime.split(':').map(Number);
+      const startObj = new Date(0); startObj.setHours(h, m, 0);
+      const endObj = new Date(startObj.getTime() + durationMinutes * 60000);
+      endTime = `${String(endObj.getHours()).padStart(2, '0')}:${String(endObj.getMinutes()).padStart(2, '0')}`;
+    }
 
     // Store in Session Memory (Cookie)
     const pendingEvent = { title: title || 'Møte', date, startTime, endTime };
@@ -133,10 +151,9 @@ The tool has stored this. Present the confirmation summary to the user exactly a
   if (params.date) {
     const targetDate = params.date;
     console.log(`[DEBUG] Conversational explicit date requested: ${targetDate}`);
-    // Compare YYYY-MM-DD string natively. sv-SE provides YYYY-MM-DD cleanly.
-    const osloFormat = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Oslo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-    if (targetDate < osloFormat) {
-      console.log(`[DEBUG] BLOCKED: Requested date ${targetDate} is in the past relative to Oslo current date (${osloFormat})`);
+    const osloToday = getOsloTodayDate();
+    if (isPastOsloDate(targetDate)) {
+      console.log(`[DEBUG] BLOCKED: Requested date ${targetDate} is in the past relative to Oslo current date (${osloToday})`);
       return baseContext + `[SYSTEM FLAG]: The user's explicitly requested date (${targetDate}) is ALREADY IN THE PAST. DO NOT suggest free or booked time. Simply inform the user naturally that this date has passed.`;
     }
 
