@@ -242,8 +242,8 @@ export async function processChatInteraction(messages: {role: 'user' | 'assistan
     const lang = detectResponseLanguage(userMessageContent);
 
     // 1. Guard against missing/expired local session state immediately
-    if (!session?.accessToken) {
-      console.log("CHAT BLOCKED: No valid accessToken in session.");
+    if (!session?.accessToken || session.error === "RefreshTokenError") {
+      console.log(`CHAT BLOCKED: Session error or missing token. Error: ${session?.error}`);
       return lang === 'no' 
         ? "Tilkoblingen til Google Kalender har utløpt. Vennligst logg inn på nytt for å fortsette."
         : "Your Google Calendar connection has expired. Please sign in again to continue.";

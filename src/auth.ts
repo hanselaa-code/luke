@@ -9,7 +9,8 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       clientSecret: process.env.AUTH_GOOGLE_SECRET,
       authorization: {
         params: {
-          scope: "openid profile email https://www.googleapis.com/auth/calendar.readonly",
+          // SCOPE CHANGE: Expanded to full calendar access for event creation
+          scope: "openid profile email https://www.googleapis.com/auth/calendar",
           prompt: "consent",
           access_type: "offline",
           response_type: "code"
@@ -19,17 +20,33 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   ],
   callbacks: {
     async jwt({ token, account }) {
-      // Persist the Google access token to the token right after signin
+      // Initial sign-in: Capture tokens and expiry
       if (account) {
-        token.accessToken = account.access_token;
+        return {
+          ...token,
+          accessToken: account.access_token,
+          refreshToken: account.refresh_token,
+          expiresAt: account.expires_at ? account.expires_at * 1000 : 0, // Store in ms
+        };
       }
-      return token;
+
+      // Subsequent access: Check if token has expired
+      // If it hasn't expired yet, return the current token
+      if (token.expiresAt && Date.now() < (token.expiresAt as number)) {
+        return token;
+      }
+
+      // If the access token has expired, try to refresh it
+      console.log("[AUTH] Access token expired. Attempting refresh...");
+      return refreshAccessToken(token);
     },
     async session({ session, token }) {
-      // Send properties to the client/server session object
-      // We will need this to authenticate API calls to Google
+      // Pass the fresh access token and any error to the session object
       if (token?.accessToken) {
         session.accessToken = token.accessToken as string;
+      }
+      if (token?.error) {
+        session.error = token.error as "RefreshTokenError";
       }
       return session;
     },
@@ -39,12 +56,55 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       const isProtected = protectedRoutes.some(route => nextUrl.pathname.startsWith(route));
 
       if (isProtected && !isLoggedIn) {
-        return false; // Redirect unauthenticated users to login
+        return false;
       }
       return true;
     },
   },
   pages: {
-    signIn: "/", // Set the custom sign-in page to the landing page
+    signIn: "/",
   },
 });
+
+/**
+ * Silent Refresh Logic: 
+ * Requests a new access token from Google using the stored refresh token.
+ */
+async function refreshAccessToken(token: any) {
+  try {
+    const url = "https://oauth2.googleapis.com/token";
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: process.env.AUTH_GOOGLE_ID!,
+        client_secret: process.env.AUTH_GOOGLE_SECRET!,
+        grant_type: "refresh_token",
+        refresh_token: token.refreshToken as string,
+      }),
+    });
+
+    const refreshedTokens = await response.json();
+
+    if (!response.ok) {
+      throw refreshedTokens;
+    }
+
+    console.log("[AUTH] Token refreshed successfully.");
+
+    return {
+      ...token,
+      accessToken: refreshedTokens.access_token,
+      expiresAt: Date.now() + refreshedTokens.expires_in * 1000,
+      // Fall back to old refresh token if a new one isn't provided
+      refreshToken: refreshedTokens.refresh_token ?? token.refreshToken,
+    };
+  } catch (error) {
+    console.error("[AUTH] Error refreshing access token", error);
+
+    return {
+      ...token,
+      error: "RefreshTokenError",
+    };
+  }
+}
