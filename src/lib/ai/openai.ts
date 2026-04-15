@@ -10,7 +10,7 @@ const openai = new OpenAI({
 
 export interface CalendarToolRequest {
   requiresCalendar: boolean;
-  action?: 'query' | 'summarize' | 'suggest' | 'create_calendar_event' | 'confirm_create' | 'cancel_create';
+  action?: 'query' | 'summarize' | 'suggest' | 'create_calendar_event' | 'confirm_create' | 'cancel_create' | 'update_calendar_event' | 'confirm_update' | 'cancel_update';
   range?: 'today' | 'tomorrow' | 'this_week' | 'next_week' | 'this_month' | 'upcoming';
   weekday?: string;
   date?: string;
@@ -27,6 +27,10 @@ export interface CalendarToolRequest {
   title?: string;
   startTime?: string;
   endTime?: string;
+  targetStartTime?: string;
+  targetEndTime?: string;
+  newTitle?: string;
+  newDate?: string;
 }
 
 /**
@@ -48,7 +52,7 @@ CRITICAL RULE: If the user provides a follow-up reference (e.g., "Hva med tirsda
 
 Keys:
 1. "requiresCalendar" (boolean): true if querying or modifying Google Calendar is necessary.
-2. "action" (string, optional): "query", "summarize", "suggest", "create_calendar_event", "confirm_create", "cancel_create"
+2. "action" (string, optional): "query", "summarize", "suggest", "create_calendar_event", "confirm_create", "cancel_create", "update_calendar_event", "confirm_update", "cancel_update"
 3. "range" (string, optional): "today" | "tomorrow" | "this_week" | "next_week" | "this_month" | "upcoming"
 4. "weekday" (string, optional): specific day like "friday", "monday"
 5. "partOfDay" (string, optional): "morning" | "afternoon" | "evening"
@@ -63,14 +67,25 @@ Keys:
 14. "date" (string, optional): exact "YYYY-MM-DD" target.
 15. "title" (string, optional): The title of the event for "create_calendar_event".
 16. "startTime" (string, optional): "HH:mm" for event creation.
-17. "endTime" (string, optional): "HH:mm" for event creation. If the user provides an explicit end time, include it and do not replace it with durationMinutes.
+17. "endTime" (string, optional): "HH:mm" for event creation or requested new end time for event updates. If the user provides an explicit end time, include it and do not replace it with durationMinutes.
+18. "targetStartTime" / "targetEndTime" (string, optional): existing event time when the user says "from 10:15-12:37".
+19. "newTitle" (string, optional): new title only if the user clearly asks to rename the event.
+20. "newDate" (string, optional): new event date for update requests. Use "date" for the existing event date/context, and "newDate" for the requested destination date.
 
 SPECIAL FLOWS:
 - CREATE: If the user wants to add, book, or schedule an event (e.g., "legg inn møte", "book time"), use action "create_calendar_event". Extract title, date, and startTime if possible.
 - CONFIRM: If the user says "ja", "ok", "gjør det", "confirm" in response to an assistant proposing to create an event, use action "confirm_create".
 - CANCEL: If the user says "nei", "stopp", "avbryt", "cancel" in response to a proposed event, use action "cancel_create".
 
+UPDATE FLOWS:
+- If the user wants to move, change, rename, or update exactly one existing event, use action "update_calendar_event". Put the existing event title/search phrase in "title", existing date in "date" if known, existing time in targetStartTime/targetEndTime if known, and requested new values in newDate/startTime/endTime/newTitle.
+- If the user says "ja", "ok", "gjÃ¸r det", "confirm" in response to an assistant proposing an update, use action "confirm_update".
+- If the user says "nei", "stopp", "avbryt", "cancel" in response to a proposed update, use action "cancel_update".
+
 Examples:
+User: "Flytt mÃ¸tet med Kari til 14:30" -> {"requiresCalendar": true, "action": "update_calendar_event", "title": "Kari", "startTime": "14:30"}
+User: "Endre skolebesÃ¸k Valencia fra 10:15-12:37 til 11:00-13:00" -> {"requiresCalendar": true, "action": "update_calendar_event", "title": "skolebesÃ¸k Valencia", "targetStartTime": "10:15", "targetEndTime": "12:37", "startTime": "11:00", "endTime": "13:00"}
+History: [Assistant: "Jeg fant denne avtalen... Vil du at jeg skal endre den...", User: "ja"] -> {"requiresCalendar": true, "action": "confirm_update"}
 User: "What time is it?" -> {"requiresCalendar": false}
 User: "Am I free tomorrow afternoon?" -> {"requiresCalendar": true, "range": "tomorrow", "partOfDay": "afternoon"}
 User: "Train from 11:09 to 13:47 Friday" -> {"requiresCalendar": true, "action": "create_calendar_event", "title": "Train", "date": "YYYY-MM-DD for Friday", "startTime": "11:09", "endTime": "13:47"}

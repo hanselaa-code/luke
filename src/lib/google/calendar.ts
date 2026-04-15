@@ -341,3 +341,42 @@ export async function createCalendarEvent(
     throw new Error(`Google API Error: ${error.message || 'Failed to create calendar event'}`);
   }
 }
+
+/**
+ * Updates one existing event in the primary Google Calendar.
+ */
+export async function updateCalendarEvent(
+  accessToken: string,
+  eventId: string,
+  event: { summary?: string; startIso?: string; endIso?: string }
+) {
+  const calendar = getCalendarClient(accessToken);
+
+  try {
+    const response = await calendar.events.patch({
+      calendarId: 'primary',
+      eventId,
+      requestBody: {
+        ...(event.summary ? { summary: event.summary } : {}),
+        ...(event.startIso ? { start: { dateTime: event.startIso, timeZone: 'Europe/Oslo' } } : {}),
+        ...(event.endIso ? { end: { dateTime: event.endIso, timeZone: 'Europe/Oslo' } } : {}),
+      },
+    });
+
+    return response.data;
+  } catch (error: any) {
+    const errorMsg = error.message?.toLowerCase() || String(error).toLowerCase();
+    const status = error.code || error.status;
+    console.error('Error updating calendar event:', error);
+
+    if (errorMsg.includes('401') || errorMsg.includes('credential') || errorMsg.includes('unauthorized') || errorMsg.includes('auth')) {
+      throw new Error('GOOGLE_AUTH_EXPIRED');
+    }
+
+    if (status === 403 || status === 404 || errorMsg.includes('forbidden') || errorMsg.includes('not found') || errorMsg.includes('insufficient permissions')) {
+      throw new Error('GOOGLE_EVENT_NOT_EDITABLE');
+    }
+
+    throw new Error(`Google API Error: ${error.message || 'Failed to update calendar event'}`);
+  }
+}

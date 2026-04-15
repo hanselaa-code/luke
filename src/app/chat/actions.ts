@@ -2,7 +2,7 @@
 
 import { auth } from '@/auth';
 import { cookies } from 'next/headers';
-import { getTomorrowsEvents, getUpcomingEvents, getOsloBounds, getFreeSlots, createCalendarEvent } from '@/lib/google/calendar';
+import { getTomorrowsEvents, getUpcomingEvents, getOsloBounds, getFreeSlots, createCalendarEvent, updateCalendarEvent, FormattedEvent } from '@/lib/google/calendar';
 import { CalendarToolRequest, generateToolRequest, generateFinalResponse, detectResponseLanguage } from '@/lib/ai/openai';
 
 function getStartHour(timeStr: string): number {
@@ -131,6 +131,147 @@ function getDeterministicCreateReply(toolContext: string, lang: 'no' | 'en'): st
     ?? getCreateSuccessReply(toolContext, lang);
 }
 
+interface PendingUpdate {
+  eventId: string;
+  title: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  newTitle?: string;
+  newDate: string;
+  newStartTime: string;
+  newEndTime: string;
+}
+
+function getOsloDateFromIso(iso?: string): string | null {
+  if (!iso) return null;
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Europe/Oslo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(iso));
+}
+
+function getOsloTimeFromIso(iso?: string): string | null {
+  if (!iso) return null;
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Oslo',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(new Date(iso));
+}
+
+function buildTimedOsloIso(date: string, time: string): string {
+  const offset = getOsloDayBounds(date).timeMin.slice(-6);
+  return `${date}T${time}:00${offset}`;
+}
+
+function addMinutesToOsloTime(date: string, time: string, minutes: number): string {
+  const [hour, minute] = time.split(':').map(Number);
+  const [year, month, day] = date.split('-').map(Number);
+  const base = new Date(Date.UTC(year, month - 1, day, hour, minute, 0));
+  const shifted = new Date(base.getTime() + minutes * 60000);
+  return `${String(shifted.getUTCHours()).padStart(2, '0')}:${String(shifted.getUTCMinutes()).padStart(2, '0')}`;
+}
+
+function minutesBetween(start: string, end: string): number {
+  const [startHour, startMinute] = start.split(':').map(Number);
+  const [endHour, endMinute] = end.split(':').map(Number);
+  return (endHour * 60 + endMinute) - (startHour * 60 + startMinute);
+}
+
+function titleMatches(eventTitle: string, query?: string): boolean {
+  if (!query) return true;
+  const normalizedTitle = eventTitle.toLowerCase();
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  return words.every((word) => normalizedTitle.includes(word));
+}
+
+function findUpdateMatches(events: FormattedEvent[], params: CalendarToolRequest): FormattedEvent[] {
+  return events.filter((event) => {
+    const eventDate = getOsloDateFromIso(event.startIso);
+    const eventStart = getOsloTimeFromIso(event.startIso);
+    const eventEnd = getOsloTimeFromIso(event.endIso);
+
+    if (!titleMatches(event.title, params.title)) return false;
+    if (params.date && eventDate !== params.date) return false;
+    if (params.targetStartTime && eventStart !== params.targetStartTime) return false;
+    if (params.targetEndTime && eventEnd !== params.targetEndTime) return false;
+
+    return !!eventDate && !!eventStart && !!eventEnd;
+  });
+}
+
+function buildPendingUpdate(event: FormattedEvent, params: CalendarToolRequest): PendingUpdate | null {
+  const date = getOsloDateFromIso(event.startIso);
+  const startTime = getOsloTimeFromIso(event.startIso);
+  const endTime = getOsloTimeFromIso(event.endIso);
+  if (!date || !startTime || !endTime) return null;
+
+  const newDate = params.newDate || date;
+  const newStartTime = params.startTime || startTime;
+  const duration = Math.max(minutesBetween(startTime, endTime), 1);
+  const newEndTime = params.endTime || (params.startTime ? addMinutesToOsloTime(newDate, newStartTime, duration) : endTime);
+
+  return {
+    eventId: event.id,
+    title: event.title,
+    date,
+    startTime,
+    endTime,
+    newTitle: params.newTitle,
+    newDate,
+    newStartTime,
+    newEndTime,
+  };
+}
+
+function formatUpdateDetails(update: PendingUpdate): string {
+  const newTitle = update.newTitle || update.title;
+  return `M\u00f8te: ${update.title}
+Dato: ${formatOsloDateLabel(update.date, 'no')}
+Tid: ${update.startTime}\u2013${update.endTime}
+
+Vil du at jeg skal endre den til:
+M\u00f8te: ${newTitle}
+Dato: ${formatOsloDateLabel(update.newDate, 'no')}
+Tid: ${update.newStartTime}\u2013${update.newEndTime}?`;
+}
+
+function getDeterministicUpdateReply(toolContext: string): string | null {
+  if (toolContext.startsWith('[UPDATE_NO_MATCH]')) {
+    return "Beklager, jeg fant ingen avtale som passer med det du ba om. Kan du skrive navnet, datoen eller tidspunktet litt mer presist?";
+  }
+
+  if (toolContext.startsWith('[UPDATE_MISSING_CHANGE]')) {
+    return "Hva vil du endre avtalen til? Du kan for eksempel oppgi ny dato, nytt tidspunkt eller ny tittel.";
+  }
+
+  if (toolContext.startsWith('[UPDATE_MULTIPLE]')) {
+    return toolContext.replace('[UPDATE_MULTIPLE]\n', '');
+  }
+
+  if (toolContext.startsWith('[PENDING_UPDATE]')) {
+    return toolContext.replace('[PENDING_UPDATE]\n', '');
+  }
+
+  if (toolContext.startsWith('[UPDATE_NOT_EDITABLE]')) {
+    return "Beklager, jeg fant avtalen, men Google Kalender tillater ikke at jeg endrer den. Den kan være fra en synkronisert eller skrivebeskyttet kalender.";
+  }
+
+  if (toolContext.startsWith('[UPDATE_SUCCESS]')) {
+    return toolContext.replace('[UPDATE_SUCCESS]\n', '');
+  }
+
+  if (toolContext.startsWith('[UPDATE_CANCELLED]')) {
+    return toolContext.replace('[UPDATE_CANCELLED]\n', '');
+  }
+
+  return null;
+}
+
 /**
  * Single server-side tool abstraction handling all calendar query combinations.
  */
@@ -146,6 +287,50 @@ async function getCalendarContext(accessToken: string, params: CalendarToolReque
 
   if (!params.requiresCalendar) {
     return baseContext + "The user's question is outside the supported calendar scope. Reply with the concise fallback guidance in the user's language.";
+  }
+
+  if (params.action === 'update_calendar_event') {
+    if (params.newDate && isPastOsloDate(params.newDate)) {
+      return `[PAST_DATE]:${params.newDate}`;
+    }
+    if (!params.newDate && !params.startTime && !params.endTime && !params.newTitle) {
+      return "[UPDATE_MISSING_CHANGE]";
+    }
+
+    const timeMin = params.date ? getOsloDayBounds(params.date).timeMin : undefined;
+    const timeMax = params.date ? getOsloDayBounds(params.date).timeMax : undefined;
+    const events = await getUpcomingEvents(accessToken, params.date ? 100 : 200, timeMin, timeMax);
+    const matches = findUpdateMatches(events, params);
+
+    if (matches.length === 0) {
+      return "[UPDATE_NO_MATCH]";
+    }
+
+    if (matches.length > 1) {
+      const choices = matches.slice(0, 5).map((event, index) => {
+        const date = getOsloDateFromIso(event.startIso);
+        const start = getOsloTimeFromIso(event.startIso);
+        const end = getOsloTimeFromIso(event.endIso);
+        const dateLabel = date ? formatOsloDateLabel(date, 'no') : event.date;
+        return `${index + 1}. ${event.title} - ${dateLabel} ${start || ''}${end ? `\u2013${end}` : ''}`;
+      }).join('\n');
+
+      return `[UPDATE_MULTIPLE]
+Jeg fant flere avtaler som kan passe. Hvilken vil du endre?
+${choices}`;
+    }
+
+    const pendingUpdate = buildPendingUpdate(matches[0], params);
+    if (!pendingUpdate) {
+      return "[UPDATE_NO_MATCH]";
+    }
+
+    const cookieStore = await cookies();
+    cookieStore.set('pending_update', JSON.stringify(pendingUpdate), { maxAge: 600, path: '/' });
+
+    return `[PENDING_UPDATE]
+Jeg fant denne avtalen:
+${formatUpdateDetails(pendingUpdate)}`;
   }
 
   if (params.action === 'create_calendar_event') {
@@ -225,6 +410,50 @@ End: ${event.endTime}`;
     const cookieStore = await cookies();
     cookieStore.delete('pending_event');
     return baseContext + "[CANCELLED]: The user chose NOT to create the event. Confirm that you won't create it.";
+  }
+
+  if (params.action === 'confirm_update') {
+    const cookieStore = await cookies();
+    const cookie = cookieStore.get('pending_update');
+    if (!cookie) {
+      return "[UPDATE_NO_MATCH]";
+    }
+
+    const update = JSON.parse(cookie.value) as PendingUpdate;
+    const startIso = buildTimedOsloIso(update.newDate, update.newStartTime);
+    const endIso = buildTimedOsloIso(update.newDate, update.newEndTime);
+
+    try {
+      await updateCalendarEvent(accessToken, update.eventId, {
+        summary: update.newTitle,
+        startIso,
+        endIso,
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'GOOGLE_EVENT_NOT_EDITABLE') {
+        return "[UPDATE_NOT_EDITABLE]";
+      }
+      throw error;
+    }
+
+    try {
+      cookieStore.delete('pending_update');
+    } catch (cleanupError) {
+      console.error("Updated calendar event, but failed to clear pending_update cookie:", cleanupError);
+    }
+
+    const finalTitle = update.newTitle || update.title;
+    return `[UPDATE_SUCCESS]
+Avtalen er oppdatert i Google Kalender:
+M\u00f8te: ${finalTitle}
+Dato: ${formatOsloDateLabel(update.newDate, 'no')}
+Tid: ${update.newStartTime}\u2013${update.newEndTime}`;
+  }
+
+  if (params.action === 'cancel_update') {
+    const cookieStore = await cookies();
+    cookieStore.delete('pending_update');
+    return "[UPDATE_CANCELLED]\nOk, jeg endrer ikke avtalen.";
   }
 
   // Determine standard fetch boundary
@@ -376,6 +605,11 @@ export async function processChatInteraction(messages: {role: 'user' | 'assistan
     const deterministicReply = getDeterministicCreateReply(toolContext, lang);
     if (deterministicReply) {
       return deterministicReply;
+    }
+
+    const deterministicUpdateReply = getDeterministicUpdateReply(toolContext);
+    if (deterministicUpdateReply) {
+      return deterministicUpdateReply;
     }
 
     // 4. Provide the result context to the final generation model
