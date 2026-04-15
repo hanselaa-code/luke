@@ -66,6 +66,71 @@ function isPastOsloDate(date: string): boolean {
   return date < getOsloTodayDate();
 }
 
+function formatOsloDateLabel(date: string, lang: 'no' | 'en'): string {
+  const [year, month, day] = date.split('-').map(Number);
+  const utcNoon = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  const locale = lang === 'no' ? 'nb-NO' : 'en-GB';
+  return new Intl.DateTimeFormat(locale, {
+    timeZone: 'Europe/Oslo',
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  }).format(utcNoon);
+}
+
+function getCreateConfirmationReply(toolContext: string, lang: 'no' | 'en'): string | null {
+  if (!toolContext.startsWith('[PENDING_CREATE]:')) return null;
+
+  const title = toolContext.match(/^Title: (.+)$/m)?.[1];
+  const date = toolContext.match(/^Date: (.+)$/m)?.[1];
+  const start = toolContext.match(/^Start: (.+)$/m)?.[1];
+  const end = toolContext.match(/^End: (.+)$/m)?.[1];
+
+  if (!title || !date || !start || !end) return null;
+
+  const dateLabel = formatOsloDateLabel(date, lang);
+  return lang === 'no'
+    ? `Jeg kan opprette f\u00f8lgende avtale:\nM\u00f8te: ${title}\nDato: ${dateLabel}\nTid: ${start}\u2013${end}\nVil du at jeg skal legge dette inn i kalenderen?`
+    : `I can create this event:\nEvent: ${title}\nDate: ${dateLabel}\nTime: ${start}\u2013${end}\nDo you want me to add it to your calendar?`;
+}
+
+function getPastDateReply(toolContext: string, lang: 'no' | 'en'): string | null {
+  const match = toolContext.match(/\[PAST_DATE\]:([0-9]{4}-[0-9]{2}-[0-9]{2})/);
+  if (!match) return null;
+
+  const dateLabel = formatOsloDateLabel(match[1], lang);
+  return lang === 'no'
+    ? `Beklager, jeg kan ikke opprette avtalen fordi ${dateLabel} allerede har passert.`
+    : `I'm sorry, I can't create the event because ${dateLabel} has already passed.`;
+}
+
+function getCreateSuccessReply(toolContext: string, lang: 'no' | 'en'): string | null {
+  if (!toolContext.startsWith('[SUCCESS]:')) return null;
+
+  const title = toolContext.match(/^Title: (.+)$/m)?.[1];
+  const date = toolContext.match(/^Date: (.+)$/m)?.[1];
+  const start = toolContext.match(/^Start: (.+)$/m)?.[1];
+  const end = toolContext.match(/^End: (.+)$/m)?.[1];
+
+  if (!title || !date || !start || !end) {
+    return lang === 'no'
+      ? "Avtalen er opprettet i Google Kalender."
+      : "The event has been created in Google Calendar.";
+  }
+
+  const dateLabel = formatOsloDateLabel(date, lang);
+  return lang === 'no'
+    ? `Avtalen er opprettet i Google Kalender:\nM\u00f8te: ${title}\nDato: ${dateLabel}\nTid: ${start}\u2013${end}`
+    : `The event has been created in Google Calendar:\nEvent: ${title}\nDate: ${dateLabel}\nTime: ${start}\u2013${end}`;
+}
+
+function getDeterministicCreateReply(toolContext: string, lang: 'no' | 'en'): string | null {
+  return getCreateConfirmationReply(toolContext, lang)
+    ?? getPastDateReply(toolContext, lang)
+    ?? getCreateSuccessReply(toolContext, lang);
+}
+
 /**
  * Single server-side tool abstraction handling all calendar query combinations.
  */
@@ -97,7 +162,7 @@ async function getCalendarContext(accessToken: string, params: CalendarToolReque
       return baseContext + `[SYSTEM INSTRUCTION]: The time is missing for the creation request (date was ${date}). Ask the user what time they want to schedule it.`;
     }
     if (isPastOsloDate(date)) {
-      return baseContext + `[SYSTEM FLAG]: The user's explicitly requested date (${date}) is ALREADY IN THE PAST. DO NOT create the event. Simply inform the user naturally that this date has passed.`;
+      return `[PAST_DATE]:${date}`;
     }
 
     let endTime = providedEndTime;
@@ -114,7 +179,7 @@ async function getCalendarContext(accessToken: string, params: CalendarToolReque
     cookieStore.set('pending_event', JSON.stringify(pendingEvent), { maxAge: 600, path: '/' });
 
     // Format for NL presentation
-    return baseContext + `[PENDING_CREATE]: The user wants to create an event. 
+    return `[PENDING_CREATE]: The user wants to create an event. 
 Title: ${pendingEvent.title}
 Date: ${pendingEvent.date}
 Start: ${pendingEvent.startTime}
@@ -143,8 +208,17 @@ The tool has stored this. Present the confirmation summary to the user exactly a
       endIso
     });
 
-    cookieStore.delete('pending_event');
-    return baseContext + "[SUCCESS]: The event has been successfully created in the Google Calendar.";
+    try {
+      cookieStore.delete('pending_event');
+    } catch (cleanupError) {
+      console.error("Created calendar event, but failed to clear pending_event cookie:", cleanupError);
+    }
+
+    return `[SUCCESS]: The event has been successfully created in Google Calendar.
+Title: ${event.title}
+Date: ${event.date}
+Start: ${event.startTime}
+End: ${event.endTime}`;
   }
 
   if (params.action === 'cancel_create') {
@@ -298,6 +372,11 @@ export async function processChatInteraction(messages: {role: 'user' | 'assistan
     // 3. Execute the single calendar tool abstraction server-side
     const toolContext = await getCalendarContext(session.accessToken, toolRequest);
     console.log("[DEBUG] Final Tool Context for LLM:", toolContext);
+
+    const deterministicReply = getDeterministicCreateReply(toolContext, lang);
+    if (deterministicReply) {
+      return deterministicReply;
+    }
 
     // 4. Provide the result context to the final generation model
     const finalResponse = await generateFinalResponse(messages, toolContext, lang);
