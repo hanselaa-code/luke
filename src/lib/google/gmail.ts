@@ -68,8 +68,8 @@ function extractBodyFromPayload(payload: any): { plain: string; html: string } {
 function stripHtml(html: string): string {
   if (!html) return '';
   return html
-    .replace(/<style[^>]*>.*<\/style>/gms, '')
-    .replace(/<script[^>]*>.*<\/script>/gms, '')
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
     .replace(/<[^>]+>/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
