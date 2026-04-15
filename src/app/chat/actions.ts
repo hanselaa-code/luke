@@ -11,6 +11,12 @@ function getStartHour(timeStr: string): number {
   return 0; // fallback
 }
 
+function getUnsupportedQuestionReply(lang: 'no' | 'en'): string {
+  return lang === 'no'
+    ? "Jeg er ikke helt sikker på det ennå, men jeg kan hjelpe deg med kalenderen din. Du kan for eksempel spørre: hva har jeg i morgen, når er jeg ledig neste uke, eller når går neste flyvning."
+    : "I'm not fully sure about that yet, but I can help with your calendar. You can ask things like: what do I have tomorrow, when am I free next week, or when is my next flight.";
+}
+
 /**
  * Single server-side tool abstraction handling all calendar query combinations.
  */
@@ -25,7 +31,7 @@ async function getCalendarContext(accessToken: string, params: CalendarToolReque
   }
 
   if (!params.requiresCalendar) {
-    return baseContext + "No calendar data was requested.";
+    return baseContext + "The user's question is outside the supported calendar scope. Reply with the concise fallback guidance in the user's language.";
   }
 
   // Determine standard fetch boundary
@@ -153,6 +159,12 @@ export async function processChatInteraction(messages: {role: 'user' | 'assistan
         : "Your Google Calendar connection has expired. Please sign in again to continue.";
     }
 
+    const toolRequest = await generateToolRequest(messages);
+
+    if (!toolRequest.requiresCalendar) {
+      return getUnsupportedQuestionReply(lang);
+    }
+
     // 3. Execute the single calendar tool abstraction server-side
     const toolContext = await getCalendarContext(session.accessToken, toolRequest);
     console.log("[DEBUG] Final Tool Context for LLM:", toolContext);
@@ -182,4 +194,3 @@ export async function processChatInteraction(messages: {role: 'user' | 'assistan
       : `Server Error: ${error instanceof Error ? error.message : String(error)}`;
   }
 }
-
