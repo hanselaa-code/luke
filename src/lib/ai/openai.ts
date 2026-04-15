@@ -101,6 +101,11 @@ User: "Sett opp avtale i morgen" -> {"requiresCalendar": true, "action": "create
 }
 
 export function detectResponseLanguage(msg: string): 'no' | 'en' {
+  const lower = msg.toLowerCase();
+  if (/\b(kan|du|t[\u00f8o]mme|slette|slett|fjern|kalenderen|avtaler)\b/u.test(lower)) {
+    return 'no';
+  }
+
   const norwegianWords = ['hva', 'når', 'hvem', 'hvordan', 'hvilken', 'hvilket', 'har', 'jeg', 'er', 'på', 'til', 'om', 'i', 'dag', 'morgen', 'kveld', 'uke', 'helg', 'hei', 'hallo', 'møte', 'neste', 'mitt', 'mine', 'noe', 'ingenting', 'fly', 'flyreise', 'kjedelig', 'rolig', 'avtale', 'jobb', 'fritid'];
   const words = msg.toLowerCase().replace(/[^a-zæøå]/g, ' ').split(/\s+/);
   

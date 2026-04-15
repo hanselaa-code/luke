@@ -18,6 +18,25 @@ function getUnsupportedQuestionReply(lang: 'no' | 'en'): string {
     : "I'm not fully sure about that yet, but I can help with your calendar. You can ask things like: what do I have tomorrow, when am I free next week, or when is my next flight.";
 }
 
+function getUnsupportedDestructiveReply(lang: 'no' | 'en'): string {
+  return lang === 'no'
+    ? "Beklager, jeg kan ikke slette eller t\u00f8mme kalenderen enn\u00e5. Jeg kan derimot hjelpe deg med \u00e5 se avtaler, finne ledig tid og opprette nye avtaler."
+    : "I'm sorry, I can't delete or clear your calendar yet. I can help you view events, find free time, and create new events.";
+}
+
+function isUnsupportedDestructiveRequest(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return [
+    /t[\u00f8o]mme\s+(kalender|calendar)/,
+    /slett(e)?\s+(alle|alt|kalender)/,
+    /fjern\s+(alle|alt|kalender)/,
+    /clear\s+(the\s+)?calendar/,
+    /delete\s+(all|everything|the\s+calendar)/,
+    /wipe\s+(a\s+day|the\s+day|everything|calendar)/,
+    /remove\s+(all|everything)/,
+  ].some((pattern) => pattern.test(normalized));
+}
+
 function getOsloDayBounds(date: string) {
   const [year, month, day] = date.split('-').map(Number);
   const noonUtc = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
@@ -257,6 +276,10 @@ export async function processChatInteraction(messages: {role: 'user' | 'assistan
     const session = await auth();
     const userMessageContent = messages.length > 0 ? messages[messages.length - 1].content : '';
     const lang = detectResponseLanguage(userMessageContent);
+
+    if (isUnsupportedDestructiveRequest(userMessageContent)) {
+      return getUnsupportedDestructiveReply(lang);
+    }
 
     // 1. Guard against missing/expired local session state immediately
     if (!session?.accessToken || session.error === "RefreshTokenError") {

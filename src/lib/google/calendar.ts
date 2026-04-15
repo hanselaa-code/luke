@@ -38,10 +38,10 @@ function formatEvent(event: any): FormattedEvent {
   // Format time string
   let timeStr = 'All Day';
   if (!isAllDay && endTime) {
-    const timeOptions: Intl.DateTimeFormatOptions = { hour: '2-digit', minute: '2-digit' };
+    const timeOptions: Intl.DateTimeFormatOptions = { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Oslo' };
     timeStr = `${startTime.toLocaleTimeString([], timeOptions)} - ${endTime.toLocaleTimeString([], timeOptions)}`;
   } else if (!isAllDay) {
-      const timeOptions: Intl.DateTimeFormatOptions = { hour: '2-digit', minute: '2-digit' };
+      const timeOptions: Intl.DateTimeFormatOptions = { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Oslo' };
       timeStr = startTime.toLocaleTimeString([], timeOptions);
   }
 
@@ -57,17 +57,18 @@ function formatEvent(event: any): FormattedEvent {
   }
 
   // Format date relative to now
-  const evtDateStr = startTime.toLocaleDateString();
-  const todayStr = new Date().toLocaleDateString();
+  const dateOptions: Intl.DateTimeFormatOptions = { timeZone: 'Europe/Oslo' };
+  const evtDateStr = startTime.toLocaleDateString([], dateOptions);
+  const todayStr = new Date().toLocaleDateString([], dateOptions);
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = tomorrow.toLocaleDateString();
+  const tomorrowStr = tomorrow.toLocaleDateString([], dateOptions);
 
   let dateDisplay = evtDateStr;
   if (evtDateStr === todayStr) dateDisplay = 'Today';
   else if (evtDateStr === tomorrowStr) dateDisplay = 'Tomorrow';
   else {
-    dateDisplay = startTime.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
+    dateDisplay = startTime.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'Europe/Oslo' });
   }
 
   return {
