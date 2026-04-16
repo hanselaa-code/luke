@@ -1,12 +1,20 @@
 import OpenAI from 'openai';
 
-if (!process.env.OPENAI_API_KEY) {
-  throw new Error("OPENAI_API_KEY is missing in environment");
-}
+let missingOpenAIKeyWarned = false;
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+function getOpenAIClient(): OpenAI | null {
+  if (!process.env.OPENAI_API_KEY) {
+    if (!missingOpenAIKeyWarned) {
+      console.warn("OPENAI_API_KEY is missing in environment; AI responses are unavailable at runtime.");
+      missingOpenAIKeyWarned = true;
+    }
+    return null;
+  }
+
+  return new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+  });
+}
 
 export interface LukeToolRequest {
   requiresCalendar: boolean;
@@ -90,6 +98,9 @@ User: "Vis e-poster fra Kari" -> {"requiresGmail": true, "gmailAction": "search"
 `;
 
   try {
+    const openai = getOpenAIClient();
+    if (!openai) return fallback;
+
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
@@ -146,6 +157,9 @@ TOOL CONTEXT:
 ${systemContext}`;
 
   try {
+    const openai = getOpenAIClient();
+    if (!openai) return "Beklager, det oppsto en feil.";
+
     const response = await openai.chat.completions.create({
       model: 'gpt-4o',
       temperature: 0.4,

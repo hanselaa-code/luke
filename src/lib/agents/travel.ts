@@ -1,8 +1,20 @@
 import OpenAI from 'openai';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+let missingOpenAIKeyWarned = false;
+
+function getOpenAIClient(): OpenAI | null {
+  if (!process.env.OPENAI_API_KEY) {
+    if (!missingOpenAIKeyWarned) {
+      console.warn("OPENAI_API_KEY is missing in environment; travel responses are unavailable at runtime.");
+      missingOpenAIKeyWarned = true;
+    }
+    return null;
+  }
+
+  return new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+  });
+}
 
 export interface TravelResult {
   title: string;
@@ -62,6 +74,9 @@ Calendar Context: ${calendarContext || 'No relevant travel events found.'}
 `;
 
   try {
+    const openai = getOpenAIClient();
+    if (!openai) return "The travel module encountered an error.";
+
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
