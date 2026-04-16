@@ -47,3 +47,32 @@ body {
     border-color: var(--border);
   }
 }
+
+/* PWA & Mobile specific overrides */
+@supports (padding: env(safe-area-inset-top)) {
+  :root {
+    --safe-top: env(safe-area-inset-top);
+    --safe-bottom: env(safe-area-inset-bottom);
+    --safe-left: env(safe-area-inset-left);
+    --safe-right: env(safe-area-inset-right);
+  }
+}
+
+html, body {
+  height: 100%;
+  overflow-x: hidden;
+  overscroll-behavior-y: none; /* Prevent rubber-banding on iOS bounce */
+}
+
+input, textarea {
+  font-size: 16px !important; /* Prevent iOS zoom on focus */
+}
+
+/* Hide scrollbar but allow scrolling */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

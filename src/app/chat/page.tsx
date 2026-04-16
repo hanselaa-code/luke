@@ -77,7 +77,7 @@ export default function ChatPage() {
   }, [messages, isTyping]);
 
   return (
-    <div className="flex flex-col h-[calc(100vh-8rem)]">
+    <div className="flex flex-col h-[calc(100svh-8rem)] landscape:h-[calc(100svh-4rem)]">
       {/* Messages Area */}
       <div 
         ref={scrollRef}

@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Header from "@/components/Header";
 import BottomNav from "@/components/BottomNav";
+import SWRegistration from "@/components/SWRegistration";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -20,12 +21,18 @@ export const metadata: Metadata = {
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
-    statusBarStyle: "default",
+    statusBarStyle: "black-translucent",
     title: "Luke",
   },
   formatDetection: {
     telephone: false,
   },
+  other: {
+    "mobile-web-app-capable": "yes",
+    "apple-mobile-web-app-capable": "yes",
+    "application-name": "Luke",
+    "apple-mobile-web-app-title": "Luke",
+  }
 };
 
 export const viewport: Viewport = {
@@ -34,6 +41,7 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({
@@ -46,7 +54,8 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased dark`}
     >
-      <body className="min-h-full bg-background text-foreground flex flex-col font-sans">
+      <body className="min-h-full bg-background text-foreground flex flex-col font-sans overflow-x-hidden selection:bg-accent/30">
+        <SWRegistration />
         <Header />
         <main className="flex-1 pb-20 overflow-x-hidden">
           {children}
